@@ -43,6 +43,12 @@ func (c DomainCheck) Run(_ context.Context, s *Subject) (Finding, error) {
 	acc := AccountabilityUnknown
 	f.Accountability = &acc
 
+	// A document that names the wrong network is reported before anything else
+	// it might say, because the contradiction is not about this asset: it is
+	// about the document itself. Reported whenever a document was read, on
+	// every path below, so no later early return can drop it.
+	appendNetworkPassphraseEvidence(&f, s)
+
 	domain := s.HomeDomain()
 	if domain == "" {
 		f.Mechanics = MechDomainUnverified
@@ -235,6 +241,45 @@ func (c DomainCheck) Run(_ context.Context, s *Subject) (Finding, error) {
 	// appendOrganisationEvidence for why it moves no other field.
 	appendOrganisationEvidence(&f, s.Toml)
 	return f, nil
+}
+
+// appendNetworkPassphraseEvidence adds the toml's own NETWORK_PASSPHRASE
+// declaration to the finding when it contradicts the network the scan read
+// from (#370).
+//
+// Network binding (#41) already refuses a scan whose declared network and
+// Horizon endpoint disagree, because the same CODE-ISSUER can exist on two
+// networks with different flags. This is the same question put to the third
+// party in the chain: the document is written for exactly one network, so a
+// toml that declares the testnet passphrase while the scan reads pubnet is
+// either stale, published for another network, or impersonating an issuer —
+// worth surfacing in every case, and attributable to the document in the same
+// way every other issuer claim is: source, URL and retrieval time, quoted so
+// both sides of the contradiction are readable in the report.
+//
+// It moves nothing else. Severity stays capability-only — an issuer cannot buy
+// or lose a level through a passphrase — and accountability was settled by the
+// reciprocity test, not by this field. Absence is not a mismatch: the key is
+// optional, so a document that declares it has made a claim and only a claimed
+// value can be contradicted, and a scan that never declared a network has
+// nothing to compare against. Either way no evidence is added, so the evidence
+// bytes — and therefore evidence_hash — are unchanged for every report without
+// a declared contradiction.
+func appendNetworkPassphraseEvidence(f *Finding, s *Subject) {
+	doc := s.Toml
+	if doc == nil || doc.NetworkPassphrase == "" || s.Network == "" {
+		return
+	}
+	if doc.NetworkPassphrase == string(s.Network) {
+		return
+	}
+	f.Evidence = append(f.Evidence, Evidence{
+		Source: "stellar.toml",
+		URL:    doc.URL,
+		Claim: fmt.Sprintf("NETWORK_PASSPHRASE %q does not match the scanned network %q",
+			doc.NetworkPassphrase, s.Network),
+		RetrievedAt: NewCanonicalTime(doc.FetchedAt),
+	})
 }
 
 // appendOrganisationEvidence adds the toml's own publisher fields — ORG_NAME

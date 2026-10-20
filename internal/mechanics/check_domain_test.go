@@ -9,6 +9,7 @@ import (
 	"github.com/use-assay/assay/internal/horizon"
 	"github.com/use-assay/assay/internal/mechanics"
 	"github.com/use-assay/assay/internal/sep1"
+	"github.com/use-assay/assay/internal/stellarexpert"
 )
 
 const (
@@ -353,4 +354,153 @@ issuer = "`+otherIssuer+`"
 	if strings.Contains(f.Evidence[0].Claim, "ORG_") {
 		t.Errorf("organisation of a non-claiming document was attributed to the asset: %q", f.Evidence[0].Claim)
 	}
+}
+
+// networkPassphraseClaim is the claim shape appendNetworkPassphraseEvidence
+// must contain: both sides of the contradiction, quoted, so a reader of the
+// report can see which document declared which network without leaving it.
+const networkPassphraseClaim = `NETWORK_PASSPHRASE "Test SDF Network ; September 2015"`
+
+// TestDomainCheckReportsNetworkPassphraseMismatch: a toml that declares
+// NETWORK_PASSPHRASE for another network is contradicted by the ledger the
+// scan read from, and the contradiction is reported as attributed evidence —
+// source, URL and retrieval time, both sides quoted (#370).
+//
+// It moves nothing else. Severity stays capability-only and accountability
+// stays what the reciprocity test settled: the network a document thinks it is
+// published on is not a statement about what the issuer can do to a balance,
+// and a wrong answer there neither verifies nor refutes the asset claim.
+func TestDomainCheckReportsNetworkPassphraseMismatch(t *testing.T) {
+	const claiming = `
+NETWORK_PASSPHRASE = "Test SDF Network ; September 2015"
+
+[[CURRENCIES]]
+code = "USDC"
+issuer = "` + domainIssuer + `"
+`
+	// The document must be reported whatever else it says: a toml that never
+	// named this asset, and a scan whose curated directory already disagrees
+	// with the issuer, both return from the check through different paths, and
+	// neither may drop the contradiction on the way out.
+	t.Run("claiming document", func(t *testing.T) {
+		s := domainSubject(t, claiming)
+		s.Network = horizon.PublicNet
+		f := runDomain(t, s)
+
+		if f.Severity != mechanics.Clear {
+			t.Errorf("severity = %v, want Clear: a passphrase claim must never move severity", f.Severity)
+		}
+		if f.Accountability == nil || *f.Accountability != mechanics.AccountabilityVerified {
+			t.Errorf("accountability = %v, want verified: reciprocity settled it, not the passphrase", f.Accountability)
+		}
+		if f.Mechanics&mechanics.MechDomainUnverified != 0 {
+			t.Error("a network contradiction is not a failed domain verification; the unverified bit must stay unset")
+		}
+		e := findNetworkEvidence(t, f)
+		if e.Source != "stellar.toml" {
+			t.Errorf("evidence source = %q, want stellar.toml", e.Source)
+		}
+		if e.URL != "https://circle.com/.well-known/stellar.toml" {
+			t.Errorf("evidence URL = %q, want the document's final location", e.URL)
+		}
+		if e.RetrievedAt.IsZero() {
+			t.Error("evidence must carry the document's retrieval time")
+		}
+		if e.Attempted || e.Refused {
+			t.Error("a declared passphrase is a retrieval, not an attempt or a refusal")
+		}
+		for _, want := range []string{networkPassphraseClaim, `"Public Global Stellar Network ; September 2015"`} {
+			if !strings.Contains(e.Claim, want) {
+				t.Errorf("claim = %q, want it to quote %q", e.Claim, want)
+			}
+		}
+	})
+
+	t.Run("document that does not claim the asset", func(t *testing.T) {
+		s := domainSubject(t, `
+NETWORK_PASSPHRASE = "Test SDF Network ; September 2015"
+
+[[CURRENCIES]]
+code = "EURC"
+issuer = "`+otherIssuer+`"
+`)
+		s.Network = horizon.PublicNet
+		f := runDomain(t, s)
+		findNetworkEvidence(t, f)
+	})
+
+	t.Run("directory disagreement returned first", func(t *testing.T) {
+		s := domainSubject(t, claiming)
+		s.Network = horizon.PublicNet
+		s.Directory = &stellarexpert.DirectoryEntry{Domain: "elsewhere.example"}
+		s.DirectoryURL = "https://api.stellar.expert/explorer/directory/" + domainIssuer
+		f := runDomain(t, s)
+		if f.Accountability == nil || *f.Accountability != mechanics.AccountabilityUnverified {
+			t.Fatalf("accountability = %v, want unverified: the directory disagrees", f.Accountability)
+		}
+		findNetworkEvidence(t, f)
+	})
+}
+
+// TestDomainCheckWithholdsNetworkEvidenceWithoutAContradiction pins the other
+// half of #370: a matching declaration and an absent declaration both produce
+// no evidence, so the evidence bytes — and therefore evidence_hash — are
+// unchanged for every asset attested without a contradiction. A scan that
+// never declared a network has nothing to compare against and is reported the
+// same way as absence.
+func TestDomainCheckWithholdsNetworkEvidenceWithoutAContradiction(t *testing.T) {
+	const claiming = `
+[[CURRENCIES]]
+code = "USDC"
+issuer = "` + domainIssuer + `"
+`
+	cases := []struct {
+		name    string
+		toml    string
+		network horizon.Network
+	}{
+		{
+			name:    "matching passphrase",
+			toml:    "NETWORK_PASSPHRASE = \"Public Global Stellar Network ; September 2015\"\n" + claiming,
+			network: horizon.PublicNet,
+		},
+		{
+			name:    "absent passphrase",
+			toml:    claiming,
+			network: horizon.PublicNet,
+		},
+		{
+			name:    "scan declared no network",
+			toml:    "NETWORK_PASSPHRASE = \"Test SDF Network ; September 2015\"\n" + claiming,
+			network: "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := domainSubject(t, tc.toml)
+			s.Network = tc.network
+			f := runDomain(t, s)
+			for _, e := range f.Evidence {
+				if strings.Contains(e.Claim, "NETWORK_PASSPHRASE") {
+					t.Errorf("NETWORK_PASSPHRASE evidence without a contradiction: %q", e.Claim)
+				}
+			}
+			if len(f.Evidence) != 1 {
+				t.Errorf("want exactly the claim's evidence entry, got %d: %+v", len(f.Evidence), f.Evidence)
+			}
+		})
+	}
+}
+
+// findNetworkEvidence returns the NETWORK_PASSPHRASE entry, failing the test
+// when the check did not emit one.
+func findNetworkEvidence(t *testing.T, f mechanics.Finding) mechanics.Evidence {
+	t.Helper()
+	for _, e := range f.Evidence {
+		if strings.Contains(e.Claim, "NETWORK_PASSPHRASE") {
+			return e
+		}
+	}
+	t.Fatalf("no NETWORK_PASSPHRASE evidence, got %d entries: %+v", len(f.Evidence), f.Evidence)
+	return mechanics.Evidence{}
 }
