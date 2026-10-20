@@ -350,12 +350,60 @@ configuration set by validator vote.
 ### The network parameters
 
 Read on 2026-09-27 with `stellar network settings --network testnet`
-(protocol 28):
+(protocol 28), and re-read unchanged on 2026-10-20 (protocol 29 — the
+`persistent_rent_rate_denominator` of `1215` and `fee_write1_kb` of `437`,
+which price the rent below, were the same on both readings):
 
 | Setting | Ledgers | At ~5 s per ledger |
 | --- | --- | --- |
 | `min_persistent_ttl` (what a fresh write gets) | 120 960 | ~7 days |
 | `max_entry_ttl` (the most an extension can grant) | 3 110 400 | ~180 days |
+
+### What the rent costs (measured 2026-10-20)
+
+The parameters above are in ledgers. This section is what they cost in
+stroops, because inclusion fees are not what an attestation costs: persistent
+rent is, and it was never measured here until now. All three figures come
+from submitted transactions on testnet, each printed by the stellar CLI's
+`--cost` output, against this repository's wasm (hash
+`ae7a8bef…371112e`, built from this branch, which includes the asset-address
+validation of #349) deployed at `CBK5HOIJ…ITP` and `CCWTAMUT…S22T`, on the
+protocol 29 network whose parameters are recorded above. The subject is
+testnet `USDC`, SAC `CA2E53VHFZ6YSWQIEIPBXJQGT6VW3VKWWZO555XKRQXYJ63GEBJJGHY7`.
+
+| What was measured | Transaction | Fee charged |
+| --- | --- | --- |
+| `attest` on an asset with no attestation yet: a new entry written and extended to the maximum in the same transaction, which is what the contract always does | [`29af8a0b…`](https://stellar.expert/explorer/testnet/tx/29af8a0b310e0b3be221766624a6dc130d9f6d92b8f5c80ffb08031634c3beb8) | **5 765 728** stroops (~0.58 XLM) |
+| `attest` again on the same asset, its entry already at the maximum | [`1ebb2008…`](https://stellar.expert/explorer/testnet/tx/1ebb20082f4991e14d9f2e05ae57b9fe9518b25ae39eb88590a12738a7604a8f), [`5d389c4e…`](https://stellar.expert/explorer/testnet/tx/5d389c4e3c4df664263b4ad347ff0c74798cde9f4ae7fb68bb79e259b3ebe45d), [`a145c03d…`](https://stellar.expert/explorer/testnet/tx/a145c03d1769796445f06c3c32ec5b4731525a0eb61ae322bc1e86d9b9dbd80b) | 19 960, 13 574, 9 924 stroops (< 0.002 XLM) |
+| `stellar contract extend --ledgers-to-extend 3110399` — one persistent entry from the network minimum to the maximum | [`52a79ec0…`](https://stellar.expert/explorer/testnet/tx/52a79ec0680fb8dbd178336ef3ee60723fe4c1ae8e3816d22aa990f0fd84d933) | **2 056 579** stroops (~0.21 XLM) |
+
+Four re-attestations were taken in all; the first, immediately after the
+initial write, charged 85 195 stroops. The exact figure moves with the host's
+refundable components, but every re-attestation sample is under 0.01 XLM.
+
+Two things the table says that the inclusion-fee measurement of
+2026-09-25 did not:
+
+- **The first attestation of an asset costs about half an XLM of rent, and
+  almost all of it is the extension to the maximum, not the write.** A
+  transaction's inclusion fee is 100 stroops; it is not the number to budget
+  by.
+- **Re-attesting the same asset does not pay that again.** The entry is
+  already at the maximum, so the extension is nearly a no-op and the cost
+  falls by more than two orders of magnitude. The loop in
+  [attestation-writer.md](attestation-writer.md) therefore runs cheaply, and
+  the expensive moments are the ones that create an entry — first attestation,
+  or re-attestation after the entry has been archived (restoring it is priced
+  at 11 589 615 simulated stroops below).
+
+The third row is the same extension priced on its own, for the by-hand
+operation at the end of this section. Its subject is a just-deployed registry
+instance rather than an attestation entry, because that is the only entry
+this contract ever leaves at the network minimum: `attest` extends every
+attestation as it writes, and `init` extends the instance. An instance entry
+is smaller than a `Safety` entry, so extending an attestation from the
+minimum costs more than 0.21 XLM — the first row is the number that already
+contains a real attestation's full-length extension.
 
 ### The live registry is already archived
 

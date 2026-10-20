@@ -146,12 +146,20 @@ coverage theatre at best. The list starts as the ten assets in
 scan corpus grew — each addition chosen, scanned, and recorded before it is
 attested.
 
-Costs, verified 2026-09-25: testnet inclusion fees sit at the 100-stroop
-network minimum (p95 200 stroops) via `getFeeStats`; the resource fee for a
-one-persistent-entry write adds a fraction of an XLM at most. Ten assets
-re-attested daily is on the order of a few XLM **per year** — fees do not
-constrain the design, which is why [freshness.md](freshness.md) can recommend
-a daily schedule plus event-driven re-attestation without a budget argument.
+Costs, measured on testnet twice over: on 2026-09-25 inclusion fees sat at the
+100-stroop network minimum (p95 200 stroops) via `getFeeStats`, and that
+measurement covered inclusion fees only. What an attestation actually costs
+is persistent rent, and that was measured on 2026-10-20 against submitted
+transactions, recorded with their hashes in
+[deployment.md](deployment.md#what-the-rent-costs-measured-2026-10-20): the
+first attestation of an asset costs 5 765 728 stroops (~0.58 XLM), almost all
+of it the extension to the network maximum rather than the write, and
+re-attesting an asset whose entry is already at the maximum costs between
+9 924 and 85 195 stroops. Ten assets re-attested daily is therefore a few to
+a few tens of XLM **per year** in the steady state, plus half an XLM for each
+asset newly added to the list — fees do not constrain the design, which is why
+[freshness.md](freshness.md) can recommend a daily schedule plus event-driven
+re-attestation without a budget argument.
 That fee argument means batching is not required for the list above. It is
 available anyway, because the ceiling it lifts is not the fee one. `attest_many`
 (see [contract-interface.md](contract-interface.md#attest_many-many-attestations-in-one-transaction))
@@ -291,8 +299,11 @@ asks for maintainer sign-off on exactly that scope boundary.
   which is the correct default for `attest` (it always writes) and the reason
   reads use `--send=no` explicitly.
 - Testnet RPC `getFeeStats`: inclusion fee mode 100 stroops, p95 200 stroops.
-  Fee posture for the daily schedule is therefore negligible; no batching or
-  fee-auction machinery is designed in.
+  That measurement covered inclusion fees only; the persistent rent an
+  `attest` actually pays was measured on 2026-10-20 and is recorded in
+  [deployment.md](deployment.md#what-the-rent-costs-measured-2026-10-20).
+  Neither constrains the daily schedule, so no batching or fee-auction
+  machinery is designed in.
 - CAP-0035 re-read from `stellar/stellar-protocol@master`: clawback
   authorization is fixed at trustline creation
   (`AUTH_CLAWBACK_ENABLED_FLAG` "must be set when a trustline is created";
