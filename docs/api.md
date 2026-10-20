@@ -8,6 +8,12 @@ All API endpoints return JSON. All responses are utf-8 encoded.
 
 Scans an asset and returns its capability report.
 
+The parameter accepts the same three spellings as the CLI — `CODE-ISSUER`,
+`CODE:ISSUER`, and a stellar.expert asset URL (percent-encoded) — and every
+response names the asset in its canonical `CODE-ISSUER` form, so evidence and
+preimage bytes do not depend on which form was sent. See
+[cli.md](cli.md#asset-identifiers).
+
 ### Response Headers
 
 - `X-Assay-Undetermined`: Set to `true` when a scan is degraded due to an upstream source outage (such as failure to reach StellarExpert). When present, the response body contains `undetermined: true` and `undetermined_checks`, indicating that the source data was incomplete and the severity should be treated with caution.

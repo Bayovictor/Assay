@@ -62,7 +62,17 @@ func ValidateHolder(id string) error {
 	return nil
 }
 
-// ParseAsset accepts the canonical CODE-ISSUER form and validates both halves.
+// ParseAsset accepts the canonical CODE-ISSUER form, the colon-separated
+// CODE:ISSUER form most Stellar tools print, and a paste-able stellar.expert
+// asset URL, and validates both halves of the identifier.
+//
+// Whichever spelling arrived, it is normalised to CODE-ISSUER before the halves
+// are validated, and the returned mechanics.Asset renders only as CODE-ISSUER
+// (mechanics.Asset.String). Every output downstream — the report, the evidence
+// lines, the attestation preimage — is built from that struct, never from the
+// user's raw argument, so the bytes hashed for "USDC:G…" and for the same
+// asset pasted as a stellar.expert URL are identical to the canonical input's.
+// The input's spelling never reaches the preimage.
 //
 // The one input with no CODE-ISSUER that is not an error of shape is the
 // native asset: "native" and "XLM" (any case) are recognised and refused with
@@ -70,6 +80,19 @@ func ValidateHolder(id string) error {
 // scan, nothing to attest. Every other separator-less input is ErrBadAsset.
 func ParseAsset(s string) (mechanics.Asset, error) {
 	s = strings.TrimSpace(s)
+	if looksLikeURL(s) {
+		canon := assetFromExplorerURL(s)
+		if canon == "" {
+			return mechanics.Asset{}, fmt.Errorf("%w: %q is not a stellar.expert asset URL (want …/asset/CODE-ISSUER)",
+				ErrBadAsset, s)
+		}
+		s = canon
+	}
+	// The colon-separated spelling: tools and docs print CODE:ISSUER, so a
+	// strict hyphen-only parser would turn a correct asset into a usage error.
+	// A URL scheme was consumed above, so the first remaining colon is the
+	// separator. Only the first: an issuer key never carries another.
+	s = strings.Replace(s, ":", "-", 1)
 	code, issuer, ok := strings.Cut(s, "-")
 	if !ok {
 		if isNativeName(s) {
@@ -102,6 +125,65 @@ func isNativeName(s string) bool {
 	default:
 		return false
 	}
+}
+
+// looksLikeURL reports whether s was pasted as a URL rather than typed as a
+// bare asset identifier: it carries a scheme, or it starts at the host people
+// paste from without one ("stellar.expert/…" survives a terminal that strips
+// the scheme).
+//
+// A URL spelling is routed to assetFromExplorerURL instead of being cut on a
+// hyphen: any other URL is refused with an explanation of the shape that was
+// wanted rather than misparsed into a plausible-looking asset.
+func looksLikeURL(s string) bool {
+	lower := strings.ToLower(s)
+	if strings.Contains(lower, "://") {
+		return true
+	}
+	return strings.HasPrefix(lower, "stellar.expert/") ||
+		strings.HasPrefix(lower, "www.stellar.expert/")
+}
+
+// assetFromExplorerURL returns the CODE-ISSUER segment of a stellar.expert
+// asset URL — https://stellar.expert/explorer/<network>/asset/CODE-ISSUER — or
+// "" when u is not such a URL.
+//
+// The <network> segment is deliberately not inspected: it says where the
+// explorer was browsing, not which ledger the scan reads. Network binding is
+// the scanner's job (#41) — resolveNetwork cross-checks Horizon against the
+// declared network — so accepting a testnet-namespace URL here cannot make a
+// pubnet scan attest a testnet fact; it only names the asset.
+//
+// Query strings and fragments are dropped, the host is matched
+// case-insensitively, and a trailing sequence suffix ("-1") on the identifier
+// is left for the caller's existing suffix handling.
+func assetFromExplorerURL(u string) string {
+	if i := strings.Index(u, "://"); i >= 0 {
+		u = u[i+3:]
+	}
+	if i := strings.IndexAny(u, "?#"); i >= 0 {
+		u = u[:i]
+	}
+	host, path, ok := strings.Cut(u, "/")
+	if !ok {
+		return ""
+	}
+	switch strings.ToLower(host) {
+	case "stellar.expert", "www.stellar.expert":
+	default:
+		return ""
+	}
+	const marker = "/asset/"
+	i := strings.Index(path, marker)
+	if i < 0 {
+		return ""
+	}
+	rest := path[i+len(marker):]
+	seg := rest
+	if j := strings.Index(rest, "/"); j >= 0 {
+		seg = rest[:j]
+	}
+	return seg
 }
 
 // Scanner fetches subject state and classifies it.

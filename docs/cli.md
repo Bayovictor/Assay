@@ -23,6 +23,22 @@ Commands that scan also accept:
   is hardcoded as authoritative, and no report changes unless you opt in. See
   [asset-lists.md](asset-lists.md).
 
+## Asset identifiers
+
+Every command that takes an asset accepts the same three spellings of it:
+
+| Spelling | Example |
+| --- | --- |
+| `CODE-ISSUER` (canonical) | `USDC-GA5Z…` |
+| `CODE:ISSUER`, as most Stellar tools print it | `USDC:GA5Z…` |
+| a stellar.expert asset URL, paste-able from the browser | `https://stellar.expert/explorer/public/asset/USDC-GA5Z…` |
+
+They are normalised on input, and the canonical `CODE-ISSUER` form is what
+every output — report, evidence lines, preimage — prints, so the bytes
+`evidence_hash` commits to are identical whichever form you pasted. The URL's
+`<network>` segment is not checked: which ledger the scan reads is settled by
+the scanner's network binding (#41), not by the address bar.
+
 ## assay scan
 
 Scans one asset and prints the full report: the findings, the reasoning behind
