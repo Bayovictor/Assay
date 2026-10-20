@@ -58,7 +58,7 @@ pub const MAX_BATCH_SIZE: u32 = 50;
 
 /// The contract's interface version, bumped on every ABI change. See
 /// "Interface versioning" below for the bump rule.
-pub const INTERFACE_VERSION: u32 = 1;
+pub const INTERFACE_VERSION: u32 = 2;
 
 pub fn get_safety(env: Env, asset: Address) -> Option<Safety>;
 pub fn version(env: Env) -> u32;
@@ -82,7 +82,7 @@ struct is a supported argument type in soroban-sdk 27.
 ## Interface versioning
 
 `version()` is a read-only entrypoint that returns the contract's interface
-version (`INTERFACE_VERSION`), currently `1`. A consumer or a drift script can
+version (`INTERFACE_VERSION`), currently `2`. A consumer or a drift script can
 call it to ask "what is this contract?" instead of inferring the interface from
 a wasm hash.
 
@@ -97,10 +97,11 @@ a wasm hash.
   safely ignore (a new `get_safety_many` does not break an existing
   `get_safety` caller), and documentation-only changes.
 
-Adding `version()` itself establishes version 1: the interface as of this
-build is version 1, and the first ABI change after it bumps to 2. The constant
-is an ABI value and is parsed by the Go ABI drift test, so it cannot drift from
-the deployed interface without a red build.
+Adding `version()` itself established version 1. The first ABI change after it
+added an error code — `InvalidAsset` (#349) — and so is version 2; signatures,
+shapes and events are unchanged. The constant is an ABI value and is parsed by
+the Go ABI drift test, so it cannot drift from the deployed interface without a
+red build.
 
 | Error | Code | Returned by |
 | --- | --- | --- |
@@ -111,6 +112,7 @@ the deployed interface without a red build.
 | `NotAttested` | 5 | `revoke` for an asset with no attestation |
 | `NoPendingAdmin` | 6 | `accept_admin` with no pending transfer |
 | `BatchTooLarge` | 7 | `attest_many` with more than `MAX_BATCH_SIZE` elements |
+| `InvalidAsset` | 8 | `attest`, `attest_many` with the registry's own address, the admin's address, or a non-contract address |
 
 ### `attest_many`: many attestations in one transaction
 
@@ -123,8 +125,9 @@ Every element is written exactly as `attest` writes it — the same
 event — and both entrypoints call the same validation function. A batch is
 **not** a lower bar:
 
-- `InvalidSeverity` and `InconsistentAttestation` are the same checks, on every
-  element. There is no batch path around the confiscation invariant.
+- `InvalidAsset`, `InvalidSeverity` and `InconsistentAttestation` are the same
+  checks, on every element. There is no batch path around the address rule or
+  the confiscation invariant.
 - `require_auth` on the admin is required, as for `attest`. An empty batch is
   authorized too: who may call an entrypoint is a property of the entrypoint,
   not of what it was handed.
@@ -404,6 +407,48 @@ code+issuer string pair. Verified live on Horizon (first recorded 2026-08-11,
 re-checked 2026-09-17): Circle's USDC has a canonical
 `contract_id` of `CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75`.
 `Address` comparison is cheap on-chain; string handling is not.
+
+**Decision (#349): `attest` refuses three kinds of address, and refuses to
+guess past them.** Storage is keyed by any `Address`, so a write aimed at the
+wrong address is fail-closed for the real asset — `get_safety` on the real SAC
+still returns `None` and every gate still refuses — but it is not harmless: it
+pays rent on an entry nobody will read as this asset, publishes an `Attested`
+event naming an address that is not this asset, and leaves an indexer
+something to explain. So the write path returns `InvalidAsset` for:
+
+1. **the registry's own address** — `attest` on the registry would key
+   `Safety(registry)` inside the registry and emit an event reading as the
+   registry attesting itself;
+2. **the admin's address** — the admin is the writer, never the subject. It is
+   normally an account, which rule 3 already covers, but `init` accepts any
+   `Address` and the direct comparison stays correct when the admin is a
+   contract (a multisig, say);
+3. **anything that is not a contract address** — an account (`G…`), a muxed
+   account (`M…`), a claimable balance or a liquidity pool id. A SAC is a
+   contract, so reading the address's type tag rules out the fat-finger case
+   the check exists for: pasting an issuer account where a SAC address belongs.
+
+Each rule costs a comparison or a tag read, with no host invocation. The
+single path and the batch path get all three from the same shared validation
+function, so `attest_many` cannot accept what `attest` refuses;
+`batch_with_an_invalid_asset_address_writes_nothing` pins that a bad address
+in the middle of a batch writes nothing at all.
+
+**What is deliberately not checked is the caller's to own: whether the
+contract at that address really is the SAC for the scanned CODE-ISSUER.**
+Answering it on-chain would mean invoking the candidate contract and trusting
+what it says about itself — neither cheap nor self-authenticating, since an
+impostor answers for itself. The same conclusion is reached off-chain, by
+resolving CODE-ISSUER to its SAC with `stellar contract id asset`, which is
+what `make attest` does before anything is signed. An impostor *contract*
+address therefore passes the on-chain rule, and the attester owns having
+resolved the right one; the stored claim is still what the scanner concluded,
+bound by `evidence_hash`.
+
+This was decided rather than assumed: the checks above are the ones that are
+cheap on-chain, everything else is documented as caller responsibility, and
+the type rule is testable — see `attest_rejects_a_non_contract_address`,
+`attest_rejects_the_registrys_own_address` and `attest_rejects_the_admin_address`.
 
 ### `Option`, so unknown is not safe
 

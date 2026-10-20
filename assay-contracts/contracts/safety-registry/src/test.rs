@@ -131,6 +131,120 @@ fn attest_rejects_out_of_range_severity() {
     assert_eq!(err, Ok(Error::InvalidSeverity));
 }
 
+// ---------------------------------------------------------------------------
+// Asset address validation (#349)
+// ---------------------------------------------------------------------------
+
+/// The registry is not an asset. A write keyed on the registry's own address
+/// would store `DataKey::Safety(registry)` inside the registry, and its event
+/// would read as the registry attesting itself — so it is refused outright
+/// rather than left to be harmless-looking pollution.
+#[test]
+fn attest_rejects_the_registrys_own_address() {
+    let (env, client, _) = setup();
+
+    let err = client
+        .try_attest(&client.address.clone(), &SEVERITY_CLEAR, &0, &hash(&env))
+        .expect_err("the registry must not attest itself");
+
+    assert_eq!(err, Ok(Error::InvalidAsset));
+    assert_eq!(client.get_safety(&client.address), None);
+    assert_eq!(
+        env.events().all().filter_by_contract(&client.address),
+        vec![&env],
+        "a rejected address must publish no event"
+    );
+}
+
+/// The admin is the writer, never the subject. The admin is usually an
+/// account, which the type check below already covers, so this pins the direct
+/// comparison too — `init` accepts any `Address`, including a contract.
+#[test]
+fn attest_rejects_the_admin_address() {
+    let (env, client, admin) = setup();
+
+    let err = client
+        .try_attest(&admin, &SEVERITY_CLEAR, &0, &hash(&env))
+        .expect_err("the admin address is not an asset");
+
+    assert_eq!(err, Ok(Error::InvalidAsset));
+    assert_eq!(client.get_safety(&admin), None);
+}
+
+/// A Stellar Asset Contract is a contract, so an account address can be ruled
+/// out by reading the address's type tag alone. This is the fat-finger case
+/// the check exists for: pasting an issuer account where a SAC address belongs
+/// would otherwise be keyed, rented and published as if it were the asset.
+#[test]
+fn attest_rejects_a_non_contract_address() {
+    let (env, client, _) = setup();
+    // The live attester/admin account from docs/deployment.md: a real G… key,
+    // the exact string a mis-paste would produce.
+    let issuer_account = Address::from_str(
+        &env,
+        "GALIEUOBDLTFJHTVH5E3MT2BMDTQ3PKMX2U6BRXVKLEB7ARFORFNNMVY",
+    );
+
+    let err = client
+        .try_attest(&issuer_account, &SEVERITY_CLEAR, &0, &hash(&env))
+        .expect_err("an account address can never be a Stellar Asset Contract");
+
+    assert_eq!(err, Ok(Error::InvalidAsset));
+    // Nothing keyed and nothing published: refused, not recorded.
+    assert_eq!(client.get_safety(&issuer_account), None);
+    assert_eq!(
+        env.events().all().filter_by_contract(&client.address),
+        vec![&env]
+    );
+}
+
+/// The address rule is enforced on the batch path by the same shared
+/// validation, so a bad address in the middle of a batch writes nothing —
+/// not the elements before it, not the elements after it, not itself.
+#[test]
+fn batch_with_an_invalid_asset_address_writes_nothing() {
+    let (env, client, admin) = setup();
+    let before = Address::generate(&env);
+    let after = Address::generate(&env);
+
+    for offender in [
+        admin.clone(),
+        client.address.clone(),
+        Address::from_str(
+            &env,
+            "GALIEUOBDLTFJHTVH5E3MT2BMDTQ3PKMX2U6BRXVKLEB7ARFORFNNMVY",
+        ),
+    ] {
+        let err = client
+            .try_attest_many(&vec![
+                &env,
+                att(&env, &before, SEVERITY_CLEAR, 0),
+                att(&env, &offender, SEVERITY_CLEAR, 0),
+                att(&env, &after, SEVERITY_CLEAR, 0),
+            ])
+            .expect_err("a batch containing an invalid address must be rejected");
+
+        assert_eq!(err, Ok(Error::InvalidAsset));
+
+        assert_eq!(
+            client.get_safety(&before),
+            None,
+            "element before the bad one"
+        );
+        assert_eq!(client.get_safety(&after), None, "element after the bad one");
+        assert_eq!(
+            client.get_safety(&offender),
+            None,
+            "the invalid element itself"
+        );
+        assert_eq!(
+            env.events().all().filter_by_contract(&client.address),
+            vec![&env],
+            "a rejected batch must publish no events"
+        );
+    }
+}
+
 /// Even if a bad attestation somehow existed, a gate below High must not admit
 /// a confiscation-capable asset.
 #[test]
@@ -287,6 +401,8 @@ fn attest_publishes_no_event_on_rejection() {
         &MECH_CLAWBACK_ENABLED,
         &hash(&env),
     );
+    // InvalidAsset.
+    let _ = client.try_attest(&client.address.clone(), &SEVERITY_CLEAR, &0, &hash(&env));
 
     assert_eq!(
         env.events().all().filter_by_contract(&client.address),
@@ -604,6 +720,7 @@ fn error_code_values_are_abi() {
     assert_eq!(Error::NotAttested as u32, 5);
     assert_eq!(Error::NoPendingAdmin as u32, 6);
     assert_eq!(Error::BatchTooLarge as u32, 7);
+    assert_eq!(Error::InvalidAsset as u32, 8);
 }
 
 /// A successful revoke emits one event with topics ("revoke", asset).
@@ -1478,9 +1595,13 @@ fn version_returns_interface_version() {
 
 /// The interface version is an ABI constant: it starts at 1 and only moves on
 /// a deliberate ABI change, which must be mirrored in docs/contract-interface.md.
+///
+/// Version 2 is the #349 change — `Error::InvalidAsset` joined the error set —
+/// and nothing else about the interface moved: same entrypoints, same shapes,
+/// same events.
 #[test]
 fn interface_version_is_abi() {
-    assert_eq!(INTERFACE_VERSION, 1);
+    assert_eq!(INTERFACE_VERSION, 2);
 }
 
 /// Results come back in the order the assets were asked for, and an asset that
