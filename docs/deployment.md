@@ -58,13 +58,18 @@ Any of these can be read at
 
 Three instances exist on testnet and none can be removed. Only one should be
 used. Checked on 2026-09-17 by fetching each contract's wasm and hashing it, and
-by reading the constructor argument from each deploy transaction:
+by reading the constructor argument from each deploy transaction or querying `policy()`:
 
-| Instance | Status | Wasm | Registry at construction |
-| --- | --- | --- | --- |
-| `CAL5VYSWLKG367D5IYGI57XH7EMN5PLJ4CD6K3MO2HJBYYKEKPG3NKRX` | **canonical** — use this | `ca40172e…` (severity ceiling) | `CBK4FBIH…` |
-| `CCMA2SW23WUWTJGSC2MTUZVYWROMVTT42NLPTBCOAHGM632KEMNL5N3G` | duplicate, **unused** — nothing in the repo refers to it | `ca40172e…` (identical) | `CBK4FBIH…` |
-| `CANO57JRGTATHGLM26TWYPIXERSPVI5R52H33K7ZUJGGOEOVVZA44W3U` | **superseded, do not use** — admits critical-by-reputation assets ([#26](https://github.com/use-assay/Assay/issues/26)) | `d1683a1e…` (capability mask only) | `CBK4FBIH…` |
+| Instance | Status | Wasm | Registry at construction | Configured Policy (`policy()`) |
+| --- | --- | --- | --- | --- |
+| `CAL5VYSWLKG367D5IYGI57XH7EMN5PLJ4CD6K3MO2HJBYYKEKPG3NKRX` | **canonical** — use this | `ca40172e…` (severity ceiling) | `CBK4FBIH…` | `max_severity: 2`, `max_age: 86400s`, `refused_mechanics: 6` |
+| `CCMA2SW23WUWTJGSC2MTUZVYWROMVTT42NLPTBCOAHGM632KEMNL5N3G` | duplicate, **unused** — nothing in the repo refers to it | `ca40172e…` (identical) | `CBK4FBIH…` | `max_severity: 2`, `max_age: 86400s`, `refused_mechanics: 6` |
+| `CANO57JRGTATHGLM26TWYPIXERSPVI5R52H33K7ZUJGGOEOVVZA44W3U` | **superseded, do not use** — admits critical-by-reputation assets ([#26](https://github.com/use-assay/Assay/issues/26)) | `d1683a1e…` (capability mask only) | `CBK4FBIH…` | `max_severity: 4`, `max_age: 86400s`, `refused_mechanics: 6` |
+
+The configured policy can be verified directly on deployed gates supporting the ABI via:
+```sh
+stellar contract invoke --id $GATE --network testnet --send=no -- policy
+```
 
 ## Does the source still build what is deployed?
 
@@ -191,19 +196,21 @@ eight further assets scanned but not attested, is in
 Every row is `v1` because all ten attestations predate the later encodings:
 the first tranche was written 2026-08-15, the second 2026-09-05, and the third
 plus the AQUA and DOGE re-attestations 2026-09-16 — all before check-set
-binding (`v2`) landed on 2026-09-26 and network/scanner binding (`v3`) on
+binding (`v2`) landed on 2026-09-26 and network binding (`v3`) on
 2026-09-27. The short names are the preimage's first line without the
-`assay-evidence-` prefix: `v1` is `assay-evidence-v1`, and so on for `v2` and
-`v3`. A verifier recomputing any of these hashes must render the `v1`
+`assay-evidence-` prefix: `v1` is `assay-evidence-v1`, and so on for `v2`, `v3`
+and `v4`. A verifier recomputing any of these hashes must render the `v1`
 bytes described in [contract-interface.md](contract-interface.md); the
-`aqua-mainnet-onchain` vector under `internal/attest/testdata/vectors/` pins
-that encoding byte-for-byte to AQUA's on-chain hash. `assay attestation
+`aqua-`, `usdc-` and `usdz-mainnet-onchain` vectors under
+`internal/attest/testdata/vectors/` pin that encoding byte-for-byte to those
+three on-chain hashes. `assay attestation
 -preimage-version v1` does that rendering from a fresh scan, and
 `scripts/reproducibility.sh` reads this column and compares each asset under
 the version recorded here, so an encoding change and an evidence change are
 reported as different outcomes (`ENCODING` vs `MISMATCH`). A future
-re-attestation under the current encoding would be `v3`, and this column is
-what says so.
+re-attestation under the current encoding would be `v4` (scanner, checks and
+network bound; every `scan.Scanner` report is v4), and this column is what says
+so.
 
 Issuers, SAC addresses, and the evidence hash each attestation commits to:
 
@@ -540,7 +547,7 @@ It checks the registry and gate addresses, the wasm hash of the registry and of
 all three gate instances, the registry each gate was constructed with, and the
 severity, flags and evidence hash of all ten attestations — 21 checks. The
 `Preimage` column is validated while the tables are parsed: every row must name
-`v1`, `v2` or `v3`, and the two tables must agree for a given asset. It is not
+`v1`, `v2`, `v3` or `v4`, and the two tables must agree for a given asset. It is not
 compared against the chain, because the chain stores only the hash; whether the
 named encoding reproduces that hash is what the
 [Reproducibility job](../CONTRIBUTING.md#the-reproducibility-job) tests by
@@ -646,11 +653,16 @@ Two-step transfer prevents accidental transfer to an unowned address or typo:
    stellar contract invoke --id <CONTRACT_ID> --source-account <NEW_ADMIN_KEY> \
      --network testnet -- accept_admin
    ```
+3. **Cancel a pending transfer** (Current Admin, optional):
+   ```sh
+   stellar contract invoke --id <CONTRACT_ID> --source-account <CURRENT_ADMIN_KEY> \
+     --network testnet -- cancel_admin_transfer
+   ```
 
-After `accept_admin` succeeds, `new_admin` becomes the sole authorized attester and the old admin key loses all write permissions.
+After `accept_admin` succeeds, `new_admin` becomes the sole authorized attester and the old admin key loses all write permissions. `cancel_admin_transfer` withdraws a proposal before it is accepted; it leaves the current admin in place, emits an event, and makes a subsequent `accept_admin` fail with `NoPendingAdmin`.
 
 > [!NOTE]
-> Redeploying contract code: Adding `transfer_admin` and `accept_admin` requires redeploying the registry contract on testnet because Soroban contract WASM is immutable without an explicit upgrade entrypoint. Redeploying requires running `init(admin)` on the newly deployed instance and re-submitting attestations for the corpus assets.
+> Redeploying contract code: Adding `transfer_admin`, `accept_admin`, and `cancel_admin_transfer` requires redeploying the registry contract on testnet because Soroban contract WASM is immutable without an explicit upgrade entrypoint. Redeploying requires running `init(admin)` on the newly deployed instance and re-submitting attestations for the corpus assets.
 
 ## What this deployment is not
 

@@ -51,7 +51,8 @@ to the fields the encoding reads:
   positions (the ABI table in the spec) as a decimal integer.
 - `checks` — the bound check set, optionally present. The encoder sorts it.
 - `network` — the full network passphrase, optionally present.
-- `scanner_bound` — opt-in to the scanner-identity encoding; see below.
+- `scanner_bound` — opt-in to the scanner-identity (v4) encoding; requires
+  `checks` and `network`. See below.
 - `evidence` — `source`, `url`, `claim` per item. Order in the input is
   irrelevant: the encoding sorts the rendered lines bytewise. Timestamps
   (`retrieved_at`) are deliberately excluded from the hash and omitted here.
@@ -70,18 +71,27 @@ and restores it afterwards, because that value is build-dependent
 should render exactly the identity the case names; a real scanner uses its
 own.
 
-## Known divergences the suite deliberately pins
+## Layouts and refused combinations
 
-This is a current-implementation divergence, annotated in the grammar and in
-the affected cases:
+Each version tag names exactly one layout ([#270](https://github.com/use-assay/Assay/issues/270)),
+and the grammar has one production per tag:
 
-1. **Ambiguous `v3` tag
-   ([#270](https://github.com/use-assay/Assay/issues/270)).**
-   One tag covers scanner-only, network-only, and both. Both layouts appear
-   as cases, each pinned to its bytes; #270's disambiguation will split the
-   grammar rule and update these cases deliberately. The empty-`checks`-line
-   divergence ([#269](https://github.com/use-assay/Assay/issues/269)) is
-   fixed: v1 bytes have no `checks` line, and the cases pin that.
+| Tag | Input bindings | Extra lines |
+| --- | --- | --- |
+| `assay-evidence-v1` | none | none: no `checks` line, not even an empty one ([#269](https://github.com/use-assay/Assay/issues/269)) |
+| `assay-evidence-v2` | `checks` | `checks` |
+| `assay-evidence-v3` | `checks`, `network` | `checks`, `network` |
+| `assay-evidence-v4` | `checks`, `network`, `scanner_bound` | `scanner` after the version line, then `checks`, `network` |
+
+Any other combination (a `network` without `checks`, or `scanner_bound`
+without both) has no tag. A conforming implementation must refuse such an
+input instead of rendering it. The suite has no case for a refused input, since
+there are no bytes to pin. `internal/attest`'s `TestPreimageVersionIsInjective`
+enumerates all eight combinations, and `TestIndependentEncoderRefusesUnencodable`
+checks that the independent encoder refuses the same ones.
+
+No divergences are pinned any more: the empty `checks` line (#269) and the
+`v3` tag covering several layouts (#270) are both fixed.
 
 ## Adding a case
 

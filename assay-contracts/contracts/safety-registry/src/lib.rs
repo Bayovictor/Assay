@@ -88,15 +88,9 @@ pub const POLICY_MASK_FREEZE_INCLUSIVE: u32 = MECH_AUTH_REVOCABLE | MECH_CLAWBAC
 ///
 /// Bump this whenever the entrypoint set, the [`Safety`] or [`Attestation`]
 /// shapes, the error codes, or the event schema change. Additive read-only
-/// entrypoints do not require a bump; removing or renaming one does. Adding
-/// this entrypoint itself established version 1, and the first ABI change
-/// after it — the error code added by #349 — bumped it to 2.
-///
-/// Version 2 adds [`Error::InvalidAsset`], which `attest` and `attest_many`
-/// return for an asset address that is known not to name a Stellar Asset
-/// Contract (#349). Signatures and the event schema are unchanged, so a
-/// consumer that never inspects error codes still sees version 1's interface;
-/// the error code set is ABI, so the version moves with it.
+/// entrypoints do not require a bump; removing or renaming one does. Version 1
+/// established the interface with [`Self::version`]; version 2 adds
+/// [`Self::cancel_admin_transfer`] and the [`AdminTransferCancelled`] event.
 pub const INTERFACE_VERSION: u32 = 2;
 
 /// Event emitted on every successful `attest` write. Rejected attestations
@@ -143,6 +137,22 @@ pub struct Revoked {
     pub asset: Address,
     /// Ledger timestamp of the revocation.
     pub revoked_at: u64,
+}
+
+/// Event emitted when the current admin withdraws a pending admin transfer.
+///
+/// Topics: `("cancel_admin", pending_admin)`. A cancellation is the only
+/// admin-transfer step that publishes an event, so an indexer can see that a
+/// proposed handover was withdrawn instead of inferring it from the next
+/// successful `transfer_admin` or `accept_admin`.
+#[contractevent(topics = ["cancel_admin"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdminTransferCancelled {
+    /// The pending admin whose proposal was withdrawn.
+    #[topic]
+    pub pending_admin: Address,
+    /// Ledger timestamp of the cancellation.
+    pub cancelled_at: u64,
 }
 
 /// One element of a [`SafetyRegistry::attest_many`] batch: the arguments of
@@ -501,6 +511,45 @@ impl SafetyRegistry {
 
         env.storage().instance().set(&DataKey::Admin, &pending);
         env.storage().instance().remove(&DataKey::PendingAdmin);
+        Ok(())
+    }
+
+    /// Withdraws a pending admin transfer proposed by [`Self::transfer_admin`].
+    ///
+    /// Requires authorization from the current admin. The admin role is
+    /// unchanged; only the pending proposal is cleared, so the current admin
+    /// keeps attesting and the previously pending address can no longer call
+    /// [`Self::accept_admin`].
+    ///
+    /// Cancelling when no transfer is pending returns [`Error::NoPendingAdmin`]
+    /// rather than succeeding quietly, so an operator learns the proposal was
+    /// already absent. Emits an [`AdminTransferCancelled`] event on success.
+    pub fn cancel_admin_transfer(env: Env) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)?;
+
+        // Report a missing proposal before requiring auth, so "nothing to
+        // cancel" is always the typed error rather than an auth failure. This
+        // is safe: the path changes no state.
+        let pending: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingAdmin)
+            .ok_or(Error::NoPendingAdmin)?;
+        admin.require_auth();
+
+        env.storage().instance().remove(&DataKey::PendingAdmin);
+
+        // Published after the removal, for the same reason as in `attest`: an
+        // observer must never see a cancellation that did not happen.
+        AdminTransferCancelled {
+            pending_admin: pending,
+            cancelled_at: env.ledger().timestamp(),
+        }
+        .publish(&env);
         Ok(())
     }
 

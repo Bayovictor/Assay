@@ -475,12 +475,11 @@ type Report struct {
 	// Checks is retained for the legacy evidence preimage encoding.
 	Checks []string `json:"-"`
 
-	// ScannerBound opts this report into the v3 preimage encoding, which
+	// ScannerBound opts this report into the v4 preimage encoding, which
 	// adds a `scanner` line naming the code that produced the report
-	// (issue #40). It is a deliberate opt-in flag rather than automatic so
-	// the encoding stays a property of the report: v1/v2 bytes are unchanged
-	// for every report that does not set it, which is what keeps the ten
-	// attestations already on chain reproducible. The identity itself is
+	// (issue #40). scan.Scanner sets it on every report it produces (#271);
+	// Engine.Run does not, so fixture-driven reports keep whatever encoding
+	// their other bindings select. The identity itself is
 	// attest.ScannerIdentity (the module version); the flag only decides
 	// whether the hashed bytes name it. Serialized so a report document can
 	// carry the fact that it was produced under identity binding.

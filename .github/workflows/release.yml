@@ -20,6 +20,11 @@ on:
 
 permissions:
   contents: write # gh release create
+  # The provenance attestation is a Sigstore statement signed with a
+  # short-lived OIDC token minted for this run. Without id-token: write the
+  # attest step cannot sign, and the action fails rather than skipping — which
+  # is the behaviour we want: a release with no attestation must not go up.
+  id-token: write
 
 jobs:
   release:
@@ -116,7 +121,29 @@ jobs:
       - name: checksum and notes
         run: |
           tag="${GITHUB_REF_NAME}"
-          (cd dist && sha256sum assay > assay.sha256)
+          # Every published binary gets a checksum, generated from the artifact
+          # rather than written out by hand: a checksum that only covers the one
+          # artifact someone remembered to name stops covering artifacts the
+          # day the release grows, and it fails open — the missing entry simply
+          # is not verified. assay.sha256 and notes.md are excluded because they
+          # are the checksum file itself and the release body.
+          #
+          # -printf '%P' drops the leading ./ so the recorded name is `assay`,
+          # which is the release asset's name; a subject recorded as `./assay`
+          # would not match what a verifier's downloaded file is called.
+          (
+            cd dist
+            find . -maxdepth 1 -type f ! -name '*.sha256' ! -name 'notes.md' -printf '%P\0' \
+              | LC_ALL=C sort -z \
+              | xargs -0 -r sha256sum > assay.sha256
+          )
+          # An empty checksum file is a release that claims to publish nothing
+          # verifiable. Fail here rather than ship a file that trivially passes.
+          if [ ! -s dist/assay.sha256 ]; then
+            echo "::error::dist/assay.sha256 is empty; no artifact was checksummed"
+            exit 1
+          fi
+          cat dist/assay.sha256
           message="$(git for-each-ref "refs/tags/$tag" --format='%(contents)')"
           {
             echo "Built from the tagged source with"
@@ -128,13 +155,29 @@ jobs:
             echo
             echo '```sh'
             echo "go install github.com/use-assay/assay/cmd/assay@${tag}"
+            echo
+            echo "# the installed binary must report the tag it was installed at"
+            echo "go version -m \"\$(command -v assay)\" | grep mod"
             echo '```'
             echo
-            echo "## Verify"
+            echo "## Verify a downloaded binary before you run it"
+            echo
+            echo "Both checks are also written up in [docs/verifying.md]"
+            echo "(https://github.com/use-assay/Assay/blob/main/docs/verifying.md)."
             echo
             echo '```sh'
-            echo 'go version -m "$(command -v assay)" | grep mod'
+            echo "# 1. integrity: the download matches the published checksum"
+            echo "sha256sum -c assay.sha256"
+            echo
+            echo "# 2. provenance: this artifact was built by the tagged commit"
+            echo "gh attestation verify assay --repo ${GITHUB_REPOSITORY}"
             echo '```'
+            echo
+            echo "Check 2 is the one that binds the bytes to the tag. Check 1 compares"
+            echo "two files published by the same release, so on its own it cannot"
+            echo "distinguish a corrupted download from a tampered one; the attestation"
+            echo "is signed by the workflow's OIDC identity and recorded in a public"
+            echo "transparency log, so it can."
             echo
             echo "## Compatibility"
             echo
@@ -142,6 +185,26 @@ jobs:
             echo
             echo "SHA-256: \`$(cut -d' ' -f1 dist/assay.sha256)\`"
           } > dist/notes.md
+
+      # Attesting before publishing keeps the release gated on the attestation:
+      # the comment above the publish step says publishing is last precisely so
+      # that a release which goes up cannot be un-shipped, and a signature the
+      # builder could not produce is a failure, not something to publish around.
+      #
+      # SHA-pinned per the policy in .github/dependabot.yml: a tag is mutable
+      # upstream, so every step names the exact commit it was read at and Dependabot
+      # keeps it current the same way it keeps version tags current.
+      # actions/attest-build-provenance@v4.2.2
+      - name: attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          # The binary itself, not assay.sha256. The action also accepts
+          # subject-checksums, but that input *trusts* the digest in the file
+          # rather than re-hashing the artifact — so a bug in the checksum step
+          # above would produce an attestation vouching for bytes that were
+          # never built. subject-path re-computes the digest from the file being
+          # published, which is the claim a verifier is actually relying on.
+          subject-path: dist/assay
 
       # Publishing is the last step so every check above gates it: a release
       # that goes up with a wrong or unstamped binary cannot be un-shipped.

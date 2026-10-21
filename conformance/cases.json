@@ -3,7 +3,7 @@
     "name": "v1-minimal-no-checks-line",
     "covers": [
       "preimage",
-      "version-line",
+      "v1-preimage",
       "field-lines",
       "asset-line",
       "severity-line",
@@ -62,6 +62,7 @@
   {
     "name": "v2-check-set-sorted",
     "covers": [
+      "v2-preimage",
       "check-list",
       "check-id",
       "checks-line"
@@ -100,6 +101,7 @@
   {
     "name": "v3-network-pubnet",
     "covers": [
+      "v3-preimage",
       "network-line"
     ],
     "notes": "Network passphrase is bound verbatim, full string, after the checks line.",
@@ -137,6 +139,7 @@
   {
     "name": "v3-network-testnet",
     "covers": [
+      "v3-preimage",
       "network-line"
     ],
     "notes": "Contrast pair with v3-network-pubnet: byte-identical except the network line, so the digests differ only through the ledger named.",
@@ -172,38 +175,13 @@
     "digest": "bc1b00e530ea265f080ac5c8097f355a941afae47856fec031d81f0cd807bc9c"
   },
   {
-    "name": "v3-scanner-bound",
+    "name": "v4-scanner-checks-network",
     "covers": [
-      "scanner-line"
-    ],
-    "notes": "Identity line immediately after the version line, identity before content.",
-    "scanner_identity": "v9.9.9-conformance",
-    "input": {
-      "accountability": "unknown",
-      "asset": {
-        "code": "VELO",
-        "issuer": "GDM4RQUQQUVSKQA7S6EM7XBZP3FCGH4Q7CL6TABQ7B2BEJ5ERARM2M5M"
-      },
-      "base_severity": "high",
-      "escalated": false,
-      "evidence": [],
-      "mechanics": [
-        "auth_clawback_enabled"
-      ],
-      "scanner_bound": true,
-      "schema_version": 1,
-      "severity": "high"
-    },
-    "preimage": "assay-evidence-v3\nscanner\tv9.9.9-conformance\nasset\tVELO-GDM4RQUQQUVSKQA7S6EM7XBZP3FCGH4Q7CL6TABQ7B2BEJ5ERARM2M5M\nseverity\t3\nbase_severity\t3\nescalated\tfalse\nmechanics\t4\naccountability\tunknown\n",
-    "digest": "1a903a5453496cf7679823662d3d94c67972356e25e7ab8ad27092c11481361f"
-  },
-  {
-    "name": "v3-network-and-scanner",
-    "covers": [
+      "v4-preimage",
       "scanner-line",
       "network-line"
     ],
-    "notes": "Divergence #270: the same assay-evidence-v3 tag also covers scanner+network together; this layout pins those bytes. #270 will split the tag and update this case deliberately.",
+    "notes": "v4: the scanner identity line immediately after the version line (identity before content), then the v3 layout. A scanner line requires both the checks and network lines (#270).",
     "scanner_identity": "v9.9.9-conformance",
     "input": {
       "accountability": "unknown",
@@ -225,8 +203,8 @@
       "schema_version": 1,
       "severity": "high"
     },
-    "preimage": "assay-evidence-v3\nscanner\tv9.9.9-conformance\nasset\tVELO-GDM4RQUQQUVSKQA7S6EM7XBZP3FCGH4Q7CL6TABQ7B2BEJ5ERARM2M5M\nseverity\t3\nbase_severity\t3\nescalated\tfalse\nmechanics\t4\naccountability\tunknown\nchecks\tcapability\nnetwork\tPublic Global Stellar Network ; September 2015\n",
-    "digest": "d0f73a4577bcab1abba5f62b0c82f9176c61b0006e0f736685ab45a5ff11284b"
+    "preimage": "assay-evidence-v4\nscanner\tv9.9.9-conformance\nasset\tVELO-GDM4RQUQQUVSKQA7S6EM7XBZP3FCGH4Q7CL6TABQ7B2BEJ5ERARM2M5M\nseverity\t3\nbase_severity\t3\nescalated\tfalse\nmechanics\t4\naccountability\tunknown\nchecks\tcapability\nnetwork\tPublic Global Stellar Network ; September 2015\n",
+    "digest": "76838059a37876edac34ccdd08e29a313fc97886ae63948ffdccd491e757d188"
   },
   {
     "name": "evidence-sorted-by-rendered-line",

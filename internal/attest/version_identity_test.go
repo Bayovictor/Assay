@@ -9,7 +9,7 @@ import (
 
 // Issue #278 — one version source, two consumers.
 //
-// The eval recorder reads internal/version.Version; the v3 preimage's
+// The eval recorder reads internal/version.Version; the v4 preimage's
 // `scanner` line reads attest.ScannerIdentity. The acceptance criterion is
 // that they cannot disagree for a tagged build, which holds because
 // ScannerIdentity is initialized from Version and nothing re-derives it. This

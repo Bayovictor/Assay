@@ -1,12 +1,11 @@
 package attest_test
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"strings"
 	"testing"
 
 	"github.com/use-assay/assay/internal/attest"
+	"github.com/use-assay/assay/internal/horizon"
 	"github.com/use-assay/assay/internal/mechanics"
 )
 
@@ -16,14 +15,17 @@ import (
 // (attest.ScannerIdentity, "devel" for unstamped builds), not a build-stamped
 // commit — a commit stamp would make every dev build hash differently and
 // destroy cross-machine reproducibility, which is what the field is for.
-// Reports opt in through Report.ScannerBound; reports without it keep the
-// exact v1/v2 bytes, so the ten on-chain attestations keep reproducing.
+// Reports opt in through Report.ScannerBound, which scan.Scanner sets (#271);
+// the scanner line is the v4 encoding, which also binds the check set and the
+// network (#270). Reports without it keep their v1/v2/v3 bytes, so the ten
+// on-chain attestations keep reproducing.
 
-// scannerBoundReport builds a clean check-set-bound report with ScannerBound
-// set, i.e. the v3 shape.
+// scannerBoundReport builds a clean report carrying all three bindings, i.e.
+// the v4 shape every scan.Scanner report has.
 func scannerBoundReport(mut func(*mechanics.Report)) *mechanics.Report {
 	return report(func(r *mechanics.Report) {
 		r.CheckSet = []string{"capability", "domain", "mutability", "reputation"}
+		r.Network = horizon.PublicNet
 		r.ScannerBound = true
 		if mut != nil {
 			mut(r)
@@ -31,19 +33,18 @@ func scannerBoundReport(mut func(*mechanics.Report)) *mechanics.Report {
 	})
 }
 
-// TestV3PreimageNamesTheScanner pins the v3 layout: version line
-// assay-evidence-v3, then the scanner identity line immediately after it
-// (identity before content), with the v2 checks line still present further
-// down.
-func TestV3PreimageNamesTheScanner(t *testing.T) {
-	pre := attest.Preimage(scannerBoundReport(nil))
+// TestV4PreimageNamesTheScanner pins the v4 layout: version line
+// assay-evidence-v4, then the scanner identity line immediately after it
+// (identity before content), with the checks and network lines further down.
+func TestV4PreimageNamesTheScanner(t *testing.T) {
+	pre := mustPreimage(t, scannerBoundReport(nil))
 
 	lines := strings.Split(pre, "\n")
-	if len(lines) < 5 {
-		t.Fatalf("v3 preimage too short:\n%s", pre)
+	if len(lines) < 10 {
+		t.Fatalf("v4 preimage too short:\n%s", pre)
 	}
-	if lines[0] != "assay-evidence-v3" {
-		t.Fatalf("version line = %q, want assay-evidence-v3", lines[0])
+	if lines[0] != attest.PreimageVersionScanner {
+		t.Fatalf("version line = %q, want %s", lines[0], attest.PreimageVersionScanner)
 	}
 	wantScanner := "scanner\t" + attest.ScannerIdentity
 	if lines[1] != wantScanner {
@@ -52,15 +53,8 @@ func TestV3PreimageNamesTheScanner(t *testing.T) {
 	if !strings.HasPrefix(lines[2], "asset\t") {
 		t.Fatalf("third line = %q, want the asset line", lines[2])
 	}
-	var sawChecks bool
-	for _, l := range lines {
-		if strings.HasPrefix(l, "checks\t") {
-			sawChecks = true
-			break
-		}
-	}
-	if !sawChecks {
-		t.Fatalf("v3 preimage lost the checks line:\n%s", pre)
+	if !strings.HasPrefix(lines[8], "checks\t") || !strings.HasPrefix(lines[9], "network\t") {
+		t.Fatalf("lines 9-10 = %q, %q; want the checks then network lines", lines[8], lines[9])
 	}
 
 	// The identity is non-empty even in dev builds: unstamped builds report
@@ -71,33 +65,42 @@ func TestV3PreimageNamesTheScanner(t *testing.T) {
 	}
 }
 
-// TestV3HashesDifferFromV2 is the property the whole issue exists for: the
+// The scanner identity is escaped exactly once, like every other field. It
+// used to be escaped twice, which a release identity never exposed but a
+// reimplementation following the spec would not reproduce.
+func TestScannerIdentityIsEscapedOnce(t *testing.T) {
+	orig := attest.ScannerIdentity
+	defer func() { attest.ScannerIdentity = orig }()
+	attest.ScannerIdentity = `odd\id`
+
+	pre := mustPreimage(t, scannerBoundReport(nil))
+	if line := strings.Split(pre, "\n")[1]; line != `scanner	odd\\id` {
+		t.Fatalf("scanner line = %q, want the backslash escaped once", line)
+	}
+}
+
+// TestV4HashesDifferFromV3 is the property the whole issue exists for: the
 // same evidence, classified by a scanner that declares its identity, must
 // hash differently from one that does not — otherwise a downgrade to a
-// different scanner version is undetectable. Changing the identity changes
-// the hash; that is the binding.
-func TestV3HashesDifferFromV2(t *testing.T) {
-	base := report(func(r *mechanics.Report) {
-		r.CheckSet = []string{"capability", "domain", "mutability", "reputation"}
-	})
-
-	v2Params, err := attest.FromReport(base)
-	if err != nil {
-		t.Fatalf("FromReport (v2): %v", err)
-	}
-	v3Params, err := attest.FromReport(scannerBoundReport(nil))
+// different scanner version is undetectable.
+func TestV4HashesDifferFromV3(t *testing.T) {
+	v3Params, err := attest.FromReport(scannerBoundReport(func(r *mechanics.Report) { r.ScannerBound = false }))
 	if err != nil {
 		t.Fatalf("FromReport (v3): %v", err)
 	}
+	v4Params, err := attest.FromReport(scannerBoundReport(nil))
+	if err != nil {
+		t.Fatalf("FromReport (v4): %v", err)
+	}
 
-	if v2Params.EvidenceHash == v3Params.EvidenceHash {
-		t.Fatal("v2 and v3 hashes are equal; the scanner identity commits nothing")
+	if v3Params.EvidenceHash == v4Params.EvidenceHash {
+		t.Fatal("v3 and v4 hashes are equal; the scanner identity commits nothing")
 	}
-	if !strings.Contains(v2Params.Preimage, "assay-evidence-v2\n") {
-		t.Fatalf("unbound report not written under v2: %q", firstLine(v2Params.Preimage))
+	if firstLine(v3Params.Preimage) != attest.PreimageVersionNetwork {
+		t.Fatalf("unbound report not written under v3: %q", firstLine(v3Params.Preimage))
 	}
-	if !strings.Contains(v3Params.Preimage, "assay-evidence-v3\n") {
-		t.Fatalf("bound report not written under v3: %q", firstLine(v3Params.Preimage))
+	if firstLine(v4Params.Preimage) != attest.PreimageVersionScanner {
+		t.Fatalf("bound report not written under v4: %q", firstLine(v4Params.Preimage))
 	}
 }
 
@@ -119,56 +122,26 @@ func TestScannerIdentityChangeMovesTheHash(t *testing.T) {
 	}
 }
 
-// TestV1AndV2BytesAreUnchangedByScannerBinding is the migration guarantee:
-// reports that do not opt in keep the exact v1/v2 bytes, so every attestation
-// already on chain keeps reproducing. The committed vectors enforce the same
-// thing byte-for-byte; this asserts the gating logic itself.
-func TestV1AndV2BytesAreUnchangedByScannerBinding(t *testing.T) {
-	pre1 := attest.Preimage(report(nil))
-	if strings.Contains(pre1, "scanner\t") || !strings.HasPrefix(pre1, "assay-evidence-v1\n") {
-		t.Fatalf("v1 report altered by the scanner encoding: %q", firstLine(pre1))
+// TestEarlierEncodingsAreUnchangedByScannerBinding is the migration
+// guarantee: reports that do not opt in keep the exact v1/v2/v3 bytes, so
+// every attestation already on chain keeps reproducing. The committed vectors
+// enforce the same thing byte-for-byte; this asserts the gating logic itself.
+func TestEarlierEncodingsAreUnchangedByScannerBinding(t *testing.T) {
+	cases := map[string]*mechanics.Report{
+		attest.PreimageVersion: report(nil),
+		attest.PreimageVersionCheckSet: report(func(r *mechanics.Report) {
+			r.CheckSet = []string{"capability"}
+		}),
+		attest.PreimageVersionNetwork: report(func(r *mechanics.Report) {
+			r.CheckSet = []string{"capability"}
+			r.Network = horizon.PublicNet
+		}),
 	}
-
-	v2Rep := report(func(r *mechanics.Report) {
-		r.CheckSet = []string{"capability", "domain", "mutability", "reputation"}
-	})
-	pre2 := attest.Preimage(v2Rep)
-	if strings.Contains(pre2, "scanner\t") || !strings.HasPrefix(pre2, "assay-evidence-v2\n") {
-		t.Fatalf("v2 report altered by the scanner encoding: %q", firstLine(pre2))
-	}
-}
-
-// TestV3VectorIsCommitted writes the v3 vector fixture if it is absent and
-// then verifies it like every other vector: the committed bytes hash to the
-// committed digest, and the implementation derives exactly those bytes. The
-// fixture is committed with this change; the write is only a fallback so the
-// test fails loudly rather than silently if the fixture is lost.
-func TestV3VectorIsCommitted(t *testing.T) {
-	rep := scannerBoundReport(func(r *mechanics.Report) {
-		r.Evidence = []mechanics.Evidence{
-			{
-				Source: "horizon",
-				URL:    vecHorizonURL,
-				Claim:  vecNoFlags,
-			},
+	for want, rep := range cases {
+		pre := mustPreimage(t, rep)
+		if strings.Contains(pre, "scanner\t") || firstLine(pre) != want {
+			t.Errorf("%s report altered by the scanner encoding: %q", want, firstLine(pre))
 		}
-	})
-
-	params, err := attest.FromReport(rep)
-	if err != nil {
-		t.Fatalf("FromReport: %v", err)
-	}
-
-	// The preimage is the v3 encoding with the expected line order.
-	if !strings.HasPrefix(params.Preimage, "assay-evidence-v3\nscanner\t") {
-		t.Fatalf("v3 preimage does not start with version+scanner lines:\n%s", params.Preimage)
-	}
-
-	// The hash is SHA-256 over exactly those bytes — the same rule every
-	// committed vector pins.
-	sum := sha256.Sum256([]byte(params.Preimage))
-	if got := hex.EncodeToString(sum[:]); got != params.EvidenceHash {
-		t.Fatalf("evidence_hash is not sha256(preimage): %s vs %s", got, params.EvidenceHash)
 	}
 }
 

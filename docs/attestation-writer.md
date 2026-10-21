@@ -276,7 +276,7 @@ compromised it.
   ([#42](https://github.com/use-assay/Assay/issues/42)) narrow this; nothing
   eliminates it except threshold attestation.
 - *It does not bind the network* — closed. The preimage binds the network
-  passphrase under `assay-evidence-v3`
+  passphrase from `assay-evidence-v3` on
   ([#41](https://github.com/use-assay/Assay/issues/41)), so a testnet scan and
   a pubnet scan of the same code+issuer no longer hash identically, and the
   scanner refuses to run when its network cannot be determined before any

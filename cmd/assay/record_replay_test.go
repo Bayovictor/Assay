@@ -158,7 +158,7 @@ func TestScanRecordThenReplayIsDeterministic(t *testing.T) {
 
 	// 4. The canonical preimage bytes — what evidence_hash commits to — are
 	// identical. This is the claim the reproducibility job depends on.
-	if got, want := attest.Preimage(replayed), attest.Preimage(live); got != want {
+	if got, want := mustPreimage(t, replayed), mustPreimage(t, live); got != want {
 		t.Errorf("preimage differs between recorded and replayed scan\n--- recorded ---\n%s\n--- replayed ---\n%s",
 			want, got)
 	}
@@ -168,8 +168,8 @@ func TestScanRecordThenReplayIsDeterministic(t *testing.T) {
 	// outright — and a fake issuer with no home_domain is undetermined by
 	// design (the blocklist is never asked, which the engine reports rather
 	// than reads as a clean answer).
-	liveSum := sha256.Sum256([]byte(attest.Preimage(live)))
-	replaySum := sha256.Sum256([]byte(attest.Preimage(replayed)))
+	liveSum := sha256.Sum256([]byte(mustPreimage(t, live)))
+	replaySum := sha256.Sum256([]byte(mustPreimage(t, replayed)))
 	if liveSum != replaySum {
 		t.Errorf("evidence hash: recorded=%x replayed=%x", liveSum, replaySum)
 	}
@@ -242,4 +242,15 @@ func TestScanReplayMissingRecordingFailsBeforeAnyFetch(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "replay: read manifest") {
 		t.Fatalf("error = %v, want the manifest refusal", err)
 	}
+}
+
+// mustPreimage renders a report's preimage and fails the test if its bindings
+// match no encoding.
+func mustPreimage(t *testing.T, rep *mechanics.Report) string {
+	t.Helper()
+	pre, err := attest.Preimage(rep)
+	if err != nil {
+		t.Fatalf("Preimage: %v", err)
+	}
+	return pre
 }

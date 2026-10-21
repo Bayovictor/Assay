@@ -84,7 +84,7 @@ func TestUndeterminedFlagDoesNotChangeThePreimage(t *testing.T) {
 	// decision is that it is not, so the bytes are identical.
 	degraded := report(func(r *mechanics.Report) { r.Undetermined = true })
 
-	if got, want := attest.Preimage(degraded), attest.Preimage(complete); got != want {
+	if got, want := mustPreimage(t, degraded), mustPreimage(t, complete); got != want {
 		t.Fatalf("the undetermined flag changed the preimage, contradicting the #43 decision:\n got: %q\nwant: %q", got, want)
 	}
 }

@@ -139,12 +139,14 @@ func TestUnboundReportKeepsItsEarlierEncoding(t *testing.T) {
 // "which ledger".
 func TestNetworkChangeMovesTheHash(t *testing.T) {
 	base, err := attest.FromReport(report(func(r *mechanics.Report) {
+		r.CheckSet = []string{"capability"}
 		r.Network = horizon.PublicNet
 	}))
 	if err != nil {
 		t.Fatalf("FromReport: %v", err)
 	}
 	moved, err := attest.FromReport(report(func(r *mechanics.Report) {
+		r.CheckSet = []string{"capability"}
 		r.Network = horizon.TestNet
 	}))
 	if err != nil {

@@ -276,3 +276,52 @@ func TestVerifyScanErrorIsInfrastructure(t *testing.T) {
 		t.Fatalf("err = %v, want the chain-read error wrapped", err)
 	}
 }
+
+// Every attestation on chain is v1 and every scan is v4, so verify must
+// compare the on-chain hash under the encoding it was written in. A v4 scan of
+// unchanged evidence agrees with a v1 attestation and says which encoding
+// matched; a change to the evidence still mismatches under every encoding.
+func TestVerifyMatchesAnOlderEncoding(t *testing.T) {
+	_, v1Params := attestableReport(t, nil)
+	chain := chainFrom(v1Params, verifyTableTime.Add(-time.Hour).Unix(), false)
+
+	bound := func(r *mechanics.Report) {
+		r.CheckSet = []string{"capability", "reputation"}
+		r.Network = "Public Global Stellar Network ; September 2015"
+		r.ScannerBound = true
+	}
+	v4Report, v4Params := attestableReport(t, bound)
+	if v4Params.EvidenceHash == v1Params.EvidenceHash {
+		t.Fatal("sanity: v4 and v1 hashes should differ")
+	}
+
+	read := func(mechanics.Asset) (*OnChainSafety, error) { return chain, nil }
+	asset := mechanics.Asset{Code: verifyTestAssetCode, Issuer: verifyTestAssetIssuer}
+	scanOf := func(r *mechanics.Report) scanFunc {
+		return func(context.Context, mechanics.Asset) (*mechanics.Report, error) { return r, nil }
+	}
+
+	res, err := verifyAsset(context.Background(), asset, 0, verifyTableTime, scanOf(v4Report), read)
+	if err != nil {
+		t.Fatalf("verifyAsset: %v", err)
+	}
+	if res.Outcome != outcomeAgree {
+		t.Fatalf("outcome = %s (%s), want agree under v1", res.Outcome, res.Detail)
+	}
+	if res.Local.Encoding != attest.PreimageVersion || res.Local.EvidenceHash != v1Params.EvidenceHash {
+		t.Fatalf("local side = %+v, want the v1 hash and encoding", res.Local)
+	}
+
+	changed, _ := attestableReport(t, func(r *mechanics.Report) {
+		bound(r)
+		r.Evidence = []mechanics.Evidence{{Source: "horizon", URL: "https://h", Claim: "moved"}}
+	})
+	res, err = verifyAsset(context.Background(), asset, 0, verifyTableTime, scanOf(changed), read)
+	if err != nil {
+		t.Fatalf("verifyAsset: %v", err)
+	}
+	if res.Outcome != outcomeMismatch || res.Local.Encoding != attest.PreimageVersionScanner {
+		t.Fatalf("changed evidence: outcome %s, encoding %s; want mismatch reported under v4",
+			res.Outcome, res.Local.Encoding)
+	}
+}

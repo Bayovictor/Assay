@@ -36,10 +36,27 @@ type PreimageInfo struct {
 	Version string `json:"version"`
 	// Asset is the CODE-ISSUER the preimage is about.
 	Asset string `json:"asset"`
-	// Checks is the sorted check set a v2 preimage binds. It is nil — not an
-	// empty set — for a v1 preimage, because v1 bound no check set at all and
-	// "bound nothing" and "bound the empty set" are different claims.
+	// Checks is the sorted check set a v2, v3 or v4 preimage binds. It is
+	// nil for a v1 preimage, because v1 bound no check set at all.
 	Checks []string `json:"checks,omitempty"`
+	// Network is the passphrase a v3 or v4 preimage binds; empty for v1/v2.
+	Network string `json:"network,omitempty"`
+	// Scanner is the scanner identity a v4 preimage binds; empty otherwise.
+	Scanner string `json:"scanner,omitempty"`
+}
+
+// commonKeys are the lines every encoding carries, in order.
+var commonKeys = []string{"asset", "severity", "base_severity", "escalated", "mechanics", "accountability"}
+
+// layouts is the exact key sequence each version tag permits before the
+// evidence lines (#270). It is the verifier's copy of the table above
+// PreimageVersion; TestPreimageVersionIsInjective keeps the two in
+// step.
+var layouts = map[string][]string{
+	PreimageVersion:         commonKeys,
+	PreimageVersionCheckSet: append(append([]string(nil), commonKeys...), "checks"),
+	PreimageVersionNetwork:  append(append([]string(nil), commonKeys...), "checks", "network"),
+	PreimageVersionScanner:  append(append([]string{"scanner"}, commonKeys...), "checks", "network"),
 }
 
 // Verification is the outcome of checking a preimage against a hash.
@@ -94,10 +111,12 @@ func NormalizeEvidenceHash(s string) (string, error) {
 //
 // It is strict about the two things a verifier cannot afford to guess: the
 // version line, because an unrecognised encoding may not mean what this package
-// assumes, and the presence of the lines that make these bytes a preimage
-// rather than a file of the right shape. Both are refusal cases rather than
-// warnings — a verifier that shrugs at an unknown version is one whose
-// agreement means nothing.
+// assumes, and the layout that version names. Each tag permits exactly one
+// sequence of lines (#270), so a preimage whose lines do not match its own tag
+// — a v1 preimage with a `checks` line, a v3 preimage without a `network`
+// line, a scanner line under any tag but v4 — is refused rather than read.
+// That is also how the empty `checks` line #269 introduced into v1 is caught:
+// those bytes were never a valid v1 preimage.
 //
 // The trailing newline is not required. HashPreimage still hashes the exact
 // bytes, so a preimage that lost its final LF in transit can be verified while
@@ -109,39 +128,46 @@ func ParsePreimage(pre []byte) (PreimageInfo, error) {
 	lines := strings.Split(strings.TrimSuffix(string(pre), "\n"), "\n")
 
 	info := PreimageInfo{Version: lines[0]}
-	switch info.Version {
-	case PreimageVersion, PreimageVersionCheckSet, PreimageVersionNetwork:
-	default:
+	want, ok := layouts[info.Version]
+	if !ok {
 		return PreimageInfo{}, fmt.Errorf("attest: unrecognised preimage version %q", info.Version)
 	}
 
-	sawAsset, sawChecks := false, false
-	for _, l := range lines[1:] {
-		if l == "" {
-			continue
-		}
+	for i, l := range lines[1:] {
 		key, val, ok := strings.Cut(l, "\t")
 		if !ok {
 			return PreimageInfo{}, fmt.Errorf("attest: line %q is not key<TAB>value", l)
 		}
+		if i >= len(want) {
+			if key != "evidence" {
+				return PreimageInfo{}, fmt.Errorf("attest: %s preimage has %q where only evidence lines may follow",
+					info.Version, key)
+			}
+			continue
+		}
+		if key != want[i] {
+			return PreimageInfo{}, fmt.Errorf("attest: %s preimage has %q at line %d, want %q",
+				info.Version, key, i+2, want[i])
+		}
 		switch key {
 		case "asset":
-			info.Asset, sawAsset = unescape(val), true
+			info.Asset = unescape(val)
 		case "checks":
-			sawChecks = true
-			if val != "" {
-				checks := strings.Split(val, ",")
-				sort.Strings(checks)
-				info.Checks = checks
+			if val == "" {
+				return PreimageInfo{}, fmt.Errorf("attest: %s preimage has an empty checks line", info.Version)
 			}
+			checks := strings.Split(val, ",")
+			sort.Strings(checks)
+			info.Checks = checks
+		case "network":
+			info.Network = unescape(val)
+		case "scanner":
+			info.Scanner = unescape(val)
 		}
 	}
-
-	if !sawAsset {
-		return PreimageInfo{}, errors.New("attest: preimage has no asset line")
-	}
-	if info.Version == PreimageVersionCheckSet && !sawChecks {
-		return PreimageInfo{}, errors.New("attest: v2 preimage has no checks line")
+	if len(lines)-1 < len(want) {
+		return PreimageInfo{}, fmt.Errorf("attest: %s preimage ends before its %q line",
+			info.Version, want[len(lines)-1])
 	}
 	return info, nil
 }

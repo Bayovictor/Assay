@@ -47,7 +47,10 @@ func TestIndependentEncoderMatchesGo(t *testing.T) {
 				// builders set Mechanics directly, so mirror that here before
 				// the report is serialized for the independent encoder.
 				rep.MechanicNames = rep.Mechanics.Names()
-				compareWithIndependentEncoder(t, python, encoder, rep, "")
+				// A scanner-bound vector names the identity it was written
+				// with; both encoders must render that one.
+				pinVectorIdentity(t, name)
+				compareWithIndependentEncoder(t, python, encoder, rep, vectorIdentity[name])
 			})
 		}
 	})
@@ -168,7 +171,7 @@ func compareWithIndependentEncoder(t *testing.T, python, encoder string, rep *me
 		t.Fatalf("decode independent encoder output: %v\noutput: %s", err, out)
 	}
 
-	wantPreimage := attest.Preimage(rep)
+	wantPreimage := mustPreimage(t, rep)
 	if got.Preimage != wantPreimage {
 		t.Fatalf("independent encoder preimage diverged\n got: %q\nwant: %q", got.Preimage, wantPreimage)
 	}
@@ -181,5 +184,42 @@ func compareWithIndependentEncoder(t *testing.T, python, encoder string, rep *me
 	wantDigest := hex.EncodeToString(sum[:])
 	if got.Digest != wantDigest {
 		t.Fatalf("independent encoder digest = %s, want %s", got.Digest, wantDigest)
+	}
+}
+
+// Both encoders refuse the same binding combinations (#270): a network
+// without a check set, and a scanner without both. Rendering one would need a
+// tag that describes a different layout, so neither implementation may emit
+// bytes for it.
+func TestIndependentEncoderRefusesUnencodable(t *testing.T) {
+	python := crossCheckPython(t)
+	encoder := filepath.Join(crossCheckRepoRoot(t), "scripts", "preimage_encoder.py")
+
+	cases := map[string]func(*mechanics.Report){
+		"network without checks": func(r *mechanics.Report) { r.Network = "Test SDF Network ; September 2015" },
+		"scanner alone":          func(r *mechanics.Report) { r.ScannerBound = true },
+		"scanner with checks":    func(r *mechanics.Report) { r.ScannerBound, r.CheckSet = true, []string{"capability"} },
+	}
+	for name, mut := range cases {
+		t.Run(name, func(t *testing.T) {
+			rep := report(mut)
+			rep.MechanicNames = rep.Mechanics.Names()
+			if _, err := attest.Preimage(rep); err == nil {
+				t.Fatal("Go encoder rendered an unencodable report")
+			}
+
+			input, err := json.Marshal(rep)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(t.TempDir(), "report.json")
+			if err := os.WriteFile(path, input, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			out, err := exec.Command(python, encoder, "--scanner-identity", "v1.2.3", path).Output()
+			if err == nil {
+				t.Fatalf("independent encoder rendered an unencodable report: %s", out)
+			}
+		})
 	}
 }

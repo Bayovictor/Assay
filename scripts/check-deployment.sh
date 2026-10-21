@@ -4,7 +4,7 @@
 # That document is the record of what is deployed: the registry and gate
 # addresses, the three gate instances with their wasm hashes, and the ten
 # attestations with their severity, flags, evidence hash and preimage encoding.
-# The preimage column is checked for presence and vocabulary (v1/v2/v3) and for
+# The preimage column is checked for presence and vocabulary (v1/v2/v3/v4) and for
 # agreement between the two tables, but not against the chain — the chain
 # stores only the hash. It has drifted
 # before — the docs named a superseded gate after the redeploy, and an
@@ -293,7 +293,7 @@ for inst in instances:
     if inst["bound"]:
         entry["bound"] = inst["bound"]
 
-PREIMAGE_VERSIONS = ("v1", "v2", "v3")
+PREIMAGE_VERSIONS = ("v1", "v2", "v3", "v4")
 
 registry_addr = next((addr for addr, e in contracts.items() if e["label"] == "registry"), None)
 for code, entry in assets.items():

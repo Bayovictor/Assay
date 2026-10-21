@@ -22,35 +22,62 @@ import (
 	"github.com/use-assay/assay/internal/version"
 )
 
-// PreimageVersion is the first line of every canonical preimage. It is part of
-// what gets hashed, so a future encoding change cannot silently produce a hash
-// that a verifier would compare against v1 bytes.
+// The preimage encodings. Each version tag names exactly one byte layout
+// (#270): the tag alone tells a verifier which lines follow it, in which order,
+// so a reimplementation never has to guess whether a line is present.
+//
+//	tag                 lines after the version line (evidence lines follow all)
+//	assay-evidence-v1   asset … accountability
+//	assay-evidence-v2   asset … accountability, checks
+//	assay-evidence-v3   asset … accountability, checks, network
+//	assay-evidence-v4   scanner, asset … accountability, checks, network
+//
+// The bindings are cumulative. A report that binds a network must also bind
+// its check set, and a report that binds the scanner must bind both. Any other
+// combination has no tag and is refused with ErrUnencodable rather than
+// written under a tag that would describe a different layout.
+
+// PreimageVersion is the original encoding: no check set, no network, no
+// scanner identity. Every attestation on chain today was hashed under it, so
+// its bytes are frozen. It carries no `checks` line at all — not an empty one —
+// because the attestations it describes were hashed without one (#269).
 const PreimageVersion = "assay-evidence-v1"
 
-// PreimageVersionCheckSet is the encoding used once a report binds its check
-// set. It adds a `checks` line naming the checks the engine actually ran, so a
-// report produced by an engine with a check removed cannot hash the same as one
-// produced by the full engine.
+// PreimageVersionCheckSet adds a `checks` line naming the checks the engine
+// actually ran, so a report produced by an engine with a check removed cannot
+// hash the same as one produced by the full engine.
 //
 // It is a v2 rather than an edit to v1 for the same reason the version line
 // exists: every attestation already on-chain was hashed under v1, and must
-// keep reproducing. A report carrying no bound check set is still written as
-// v1; only reports that ran through an engine with a check set use v2.
+// keep reproducing.
 const PreimageVersionCheckSet = "assay-evidence-v2"
 
-// PreimageVersionNetwork is the encoding used once a report binds the network
-// its facts were read from. It adds a `network` line carrying the full network
-// passphrase, so a pubnet scan and a testnet scan of the same CODE-ISSUER can
-// no longer produce indistinguishable preimages (#41): the same identifier can
-// exist on both networks with different flags, and Assay's attestations are
-// currently written to testnet while scanning pubnet, which made the ambiguity
-// concrete.
-//
-// Like the v2 bump, it is a new version rather than an edit: attestations on
-// chain under v1 and v2 must keep reproducing, so a report carrying no bound
-// network is still written under its earlier encoding, and only scans that
-// name their network hash as v3.
+// PreimageVersionNetwork adds a `network` line, after `checks`, carrying the
+// full network passphrase, so a pubnet scan and a testnet scan of the same
+// CODE-ISSUER can no longer produce indistinguishable preimages (#41): the same
+// identifier can exist on both networks with different flags, and Assay's
+// attestations are currently written to testnet while scanning pubnet, which
+// made the ambiguity concrete. A v3 preimage always carries both the checks
+// line and the network line.
 const PreimageVersionNetwork = "assay-evidence-v3"
+
+// PreimageVersionScanner adds a `scanner` line immediately after the version
+// line (identity before content) naming the code that produced the report
+// (#40), on top of everything v3 binds. It is a tag of its own rather than a
+// variant of v3 (#270): before this split, "assay-evidence-v3" covered
+// scanner-only, network-only and both, so the tag did not determine the bytes.
+// Every report produced by scan.Scanner is written under it (#271).
+const PreimageVersionScanner = "assay-evidence-v4"
+
+// ErrUnencodable reports a report whose combination of bindings has no
+// version tag — a network without a check set, or a scanner identity without a
+// network and a check set — or a request to render a report under an encoding
+// that binds something the report does not carry. Either could only produce
+// bytes under a tag that describes a different layout, which is the ambiguity
+// #270 removed, so it is refused instead. No production code path produces an
+// unencodable report: Engine.Run binds the check set, and scan.Scanner binds
+// the network and the scanner.
+var ErrUnencodable = errors.New("attest: report's bindings match no preimage encoding")
 
 // ErrUnknownPreimageVersion reports a request to render a report under an
 // encoding this package does not know. Guessing would produce bytes under
@@ -59,7 +86,7 @@ const PreimageVersionNetwork = "assay-evidence-v3"
 var ErrUnknownPreimageVersion = errors.New("attest: unknown preimage version")
 
 // NormalizePreimageVersion accepts either the short name the deployment record
-// uses (v1, v2, v3) or the full version line (assay-evidence-v1, …), and
+// uses (v1, v2, v3, v4) or the full version line (assay-evidence-v1, …), and
 // returns the full line. Only the versions that have existed are accepted: a
 // future version cannot be rendered by an older binary, and pretending
 // otherwise would emit bytes under the wrong rules.
@@ -71,13 +98,15 @@ func NormalizePreimageVersion(version string) (string, error) {
 		return PreimageVersionCheckSet, nil
 	case PreimageVersionNetwork, "v3":
 		return PreimageVersionNetwork, nil
+	case PreimageVersionScanner, "v4":
+		return PreimageVersionScanner, nil
 	default:
-		return "", fmt.Errorf("%w: %q (want v1, v2, v3 or a full assay-evidence-vN line)",
+		return "", fmt.Errorf("%w: %q (want v1, v2, v3, v4 or a full assay-evidence-vN line)",
 			ErrUnknownPreimageVersion, version)
 	}
 }
 
-// ScannerIdentity identifies the code that produced a report, for the v3
+// ScannerIdentity identifies the code that produced a report, for the v4
 // preimage's `scanner` line (issue #40).
 //
 // The choice of WHAT identifies a scanner was the decision this issue asked
@@ -95,7 +124,8 @@ func NormalizePreimageVersion(version string) (string, error) {
 // silently pretending to be one.
 //
 // The value comes from internal/version, which computes it once from the
-// binary's module build info; initializing from that variable rather than
+// binary's module build info and reports pseudo-versions (the commit stamp
+// `go build` adds in a git checkout) as "devel" too; initializing from that variable rather than
 // repeating the computation is what keeps the eval recorder's version and this
 // identity from ever disagreeing for a tagged build (issue #278). It is a var
 // rather than a constant so tests can pin a known identity and so a future
@@ -228,26 +258,24 @@ func FromReport(rep *mechanics.Report) (Params, error) {
 
 // FromReportAs is FromReport with an explicit encoding version.
 //
-// An empty version keeps the newest encoding the report's bindings select,
-// which is what a fresh attestation should use. A named version (v1, v2, v3 or
-// the full `assay-evidence-vN` line) renders the report under that historical
-// encoding instead: reproducing an attestation already on chain means
-// recomputing the hash over the bytes it was actually written under, not over
-// whatever the current scanner emits. Rendering never mutates the report, so
-// the same scan can be derived under several versions.
+// An empty version keeps the encoding the report's bindings select, which is
+// what a fresh attestation should use. A named version (v1 … v4 or the full
+// `assay-evidence-vN` line) renders the report under that historical encoding
+// instead: reproducing an attestation already on chain means recomputing the
+// hash over the bytes it was actually written under, not over whatever the
+// current scanner emits. A named version may withhold bindings the report
+// carries but never invent one: asking for v3 from a report with no network is
+// ErrUnencodable. Rendering never mutates the report, so the same scan can be
+// derived under several versions.
 func FromReportAs(rep *mechanics.Report, version string) (Params, error) {
 	flags := uint32(rep.Mechanics)
 	sev := uint32(rep.Severity)
 
 	// The version is validated before any other work so an unknown encoding
 	// fails with its own error rather than after an expensive derivation.
-	enc := preimageVersion(rep)
-	if version != "" {
-		var err error
-		enc, err = NormalizePreimageVersion(version)
-		if err != nil {
-			return Params{}, err
-		}
+	enc, err := encodingFor(rep, version)
+	if err != nil {
+		return Params{}, err
 	}
 
 	// An unevaluated capability axis is refused before the generic undetermined
@@ -312,32 +340,27 @@ func FromReportAs(rep *mechanics.Report, version string) (Params, error) {
 }
 
 // Preimage renders the canonical bytes that evidence_hash commits to, under
-// the newest encoding the report's bindings select.
+// the one encoding the report's bindings select.
 //
-// The format is line-oriented, tab-separated, LF-terminated, UTF-8:
+// The format is line-oriented, tab-separated, LF-terminated, UTF-8. The
+// version line names one fixed layout (see the table above PreimageVersion):
 //
-//	assay-evidence-v1                    (no check set, no scanner identity)
+//	assay-evidence-vN
+//	scanner	VERSION                  (v4 only: module version, or "devel")
 //	asset	CODE-ISSUER
 //	severity	N
 //	base_severity	N
 //	escalated	true|false
 //	mechanics	N
 //	accountability	NAME
+//	checks	ID,ID,...                (v2, v3, v4: checks the engine ran, sorted)
+//	network	PASSPHRASE               (v3, v4: ledger the facts were read from)
 //	evidence	SOURCE	URL	CLAIM      (one per claim, sorted)
 //
-// A report that binds its check set adds one line after `accountability`
-// and is written as:
+// A line a layout does not include is absent, never present and empty. In
+// particular a v1 preimage has no `checks` line (#269).
 //
-//	assay-evidence-v2
-//	checks	ID,ID,...                (checks the engine ran, sorted)
-//
-// A report that also carries a scanner identity adds the identity line
-// immediately after the version line and is written as:
-//
-//	assay-evidence-v3
-//	scanner	VERSION                  (module version, or "devel")
-//	checks	ID,ID,...
-//	network	PASSPHRASE               (ledger the facts were read from)
+// It returns ErrUnencodable for a report whose bindings match no layout.
 //
 // Two decisions in here are worth stating outright.
 //
@@ -352,50 +375,77 @@ func FromReportAs(rep *mechanics.Report, version string) (Params, error) {
 //
 // Evidence lines are sorted bytewise rather than left in check order, so
 // reordering checks does not change the hash for evidence that did not change.
-// Adding or removing a check does change it, by design: the v2 `checks` line
+// Adding or removing a check does change it, by design: the `checks` line
 // binds the check set, so a check removed from the engine cannot hide behind an
-// otherwise identical report. From v3 on the `network` line names the ledger
-// the facts were read from, so the same identifier scanned on two networks
-// hashes differently.
-func Preimage(rep *mechanics.Report) string {
-	return renderPreimage(rep, preimageVersion(rep))
+// otherwise identical report.
+func Preimage(rep *mechanics.Report) (string, error) {
+	return PreimageAs(rep, "")
 }
 
-// PreimageAs renders a report under an explicitly requested encoding version,
-// ignoring the newest binding the report carries. It is how a historical
-// attestation is reproduced: a fresh scan under v3 bindings is rendered back
-// down to the v1 bytes the registry actually stores a hash over.
+// PreimageAs renders a report under an explicitly requested encoding version.
+// It is how a historical attestation is reproduced: a fresh scan carrying v4
+// bindings is rendered back down to the v1 bytes the registry actually stores
+// a hash over, by withholding the bindings v1 predates.
 //
-// Version accepts v1, v2, v3 or the full `assay-evidence-vN` line; anything
-// else is refused with ErrUnknownPreimageVersion.
+// Version accepts v1 … v4 or the full `assay-evidence-vN` line, and an empty
+// version means the encoding the report's bindings select. An unknown version
+// is ErrUnknownPreimageVersion; a version that binds something the report does
+// not carry is ErrUnencodable.
 func PreimageAs(rep *mechanics.Report, version string) (string, error) {
-	enc, err := NormalizePreimageVersion(version)
+	enc, err := encodingFor(rep, version)
 	if err != nil {
 		return "", err
 	}
 	return renderPreimage(rep, enc), nil
 }
 
+// encodingRank orders the tags by the bindings they carry; each tag binds
+// everything the tags below it bind.
+var encodingRank = map[string]int{
+	PreimageVersion:         1,
+	PreimageVersionCheckSet: 2,
+	PreimageVersionNetwork:  3,
+	PreimageVersionScanner:  4,
+}
+
+// encodingFor resolves the encoding a report is rendered under: the one its
+// bindings select when version is empty, otherwise the named version, as long
+// as the report carries every binding that version writes.
+func encodingFor(rep *mechanics.Report, version string) (string, error) {
+	own, err := preimageVersion(rep)
+	if version == "" {
+		return own, err
+	}
+	enc, verr := NormalizePreimageVersion(version)
+	if verr != nil {
+		return "", verr
+	}
+	if err != nil {
+		return "", err
+	}
+	if encodingRank[enc] > encodingRank[own] {
+		return "", fmt.Errorf("%w: the report supports at most %s, not %s", ErrUnencodable, own, enc)
+	}
+	return enc, nil
+}
+
 // renderPreimage writes a report under the rules of one encoding version.
 //
-// The version line always names the requested encoding, and only the lines
-// that version defines are written: a v1 rendering carries no checks, scanner
-// or network line even when the report has those bindings, because a v1
-// attestation was hashed without them. That the checks line is absent — not
-// empty — is the exact v1 byte shape every on-chain v1 attestation committed
-// to; an empty `checks` line is different bytes and a different hash (#269).
+// The version alone decides which lines are written, and encodingFor has
+// already checked that the report carries every binding that version needs.
+// A rendering under an older version than the report's own withholds the newer
+// lines: a v1 rendering carries no checks, network or scanner line because a v1
+// attestation was hashed without them.
 func renderPreimage(rep *mechanics.Report, version string) string {
-	var b strings.Builder
+	rank := encodingRank[version]
 
+	var b strings.Builder
 	b.WriteString(version)
 	b.WriteByte('\n')
-	// The scanner identity line is the v3 addition (issue #40): the hashed
-	// bytes name the code that produced the report, so two versions that
-	// classify differently can never hash identically. It comes right after
-	// the version line — identity before content — and only when the report
-	// opted into identity binding.
-	if version == PreimageVersionNetwork && preimageHasScanner(rep) {
-		line(&b, "scanner", escape(ScannerIdentity))
+	// Identity before content (#40). The value is escaped once, by line, like
+	// every other field.
+	if rank >= 4 {
+		line(&b, "scanner", ScannerIdentity)
 	}
 	line(&b, "asset", rep.Asset.String())
 	line(&b, "severity", strconv.FormatUint(uint64(rep.Severity), 10))
@@ -404,25 +454,12 @@ func renderPreimage(rep *mechanics.Report, version string) string {
 	line(&b, "mechanics", strconv.FormatUint(uint64(rep.Mechanics), 10))
 	line(&b, "accountability", string(rep.Accountability))
 
-	// The checks line exists only when the report binds a check set: it names
-	// the checks the engine ran, so a verifier can tell a report from a
-	// smaller engine apart. A report with no bound set omits the line
-	// entirely — under every version, including v1, whose bytes never had it
-	// (#269). An explicitly requested v1 rendering also omits it even if the
-	// report carries a set, because the attestation it reproduces was hashed
-	// without the line.
-	if version != PreimageVersion && len(rep.CheckSet) > 0 {
+	if rank >= 2 {
 		checks := append([]string(nil), rep.CheckSet...)
 		sort.Strings(checks)
 		line(&b, "checks", strings.Join(checks, ","))
 	}
-
-	// A bound network is written after the check set and before the evidence:
-	// the encoding is line-oriented, so a new field takes a fixed position and
-	// every earlier encoding must keep rendering byte-identically without it.
-	// Reports with no network omit the line entirely, keeping the exact v1/v2
-	// bytes an on-chain attestation was hashed under.
-	if version == PreimageVersionNetwork && rep.Network != "" {
+	if rank >= 3 {
 		line(&b, "network", string(rep.Network))
 	}
 
@@ -439,33 +476,27 @@ func renderPreimage(rep *mechanics.Report, version string) string {
 	return b.String()
 }
 
-// preimageVersion returns the encoding version a report is written under.
+// preimageVersion returns the one encoding whose layout matches the bindings a
+// report carries, or ErrUnencodable when none does.
 //
-// The version names the newest binding the report carries: a report that names
-// its network is v3; one that binds only a check set is v2; one with neither
-// keeps the exact v1 bytes, so an attestation written before check-set or
-// network binding still reproduces its hash. Each version's rendering rules
-// are cumulative — a v3 report with no bound check set carries the network
-// line but not the checks line — so the version line always determines the
-// byte format completely.
-func preimageVersion(rep *mechanics.Report) string {
+// The mapping is injective by construction: each tag corresponds to exactly
+// one combination of (check set, network, scanner), and the four allowed
+// combinations are the cumulative ones. TestPreimageVersionIsInjective
+// enumerates all eight combinations.
+func preimageVersion(rep *mechanics.Report) (string, error) {
+	cs, net, sb := len(rep.CheckSet) > 0, rep.Network != "", rep.ScannerBound
 	switch {
-	case preimageHasScanner(rep) || rep.Network != "":
-		return PreimageVersionNetwork
-	case len(rep.CheckSet) > 0:
-		return PreimageVersionCheckSet
-	default:
-		return PreimageVersion
+	case !cs && !net && !sb:
+		return PreimageVersion, nil
+	case cs && !net && !sb:
+		return PreimageVersionCheckSet, nil
+	case cs && net && !sb:
+		return PreimageVersionNetwork, nil
+	case cs && net && sb:
+		return PreimageVersionScanner, nil
 	}
-}
-
-// preimageHasScanner reports whether a report is written under the v3
-// encoding. Gating on ScannerBound rather than on the identity value keeps
-// the encoding decision a property of the REPORT: an operator who wants v1
-// bytes can produce a report without the binding, and a reader can tell from
-// the version line alone whether the bytes name their producer.
-func preimageHasScanner(rep *mechanics.Report) bool {
-	return rep.ScannerBound
+	return "", fmt.Errorf("%w: check set %t, network %t, scanner %t "+
+		"(a network needs a check set; a scanner needs both)", ErrUnencodable, cs, net, sb)
 }
 
 // CheckSetStatus describes whether a report's bound check set can be compared

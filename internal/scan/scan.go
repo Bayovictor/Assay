@@ -352,7 +352,7 @@ func (s *Scanner) Subject(ctx context.Context, a mechanics.Asset) (*mechanics.Su
 	stat, err := s.Horizon.Asset(statCtx, a.Code, a.Issuer)
 	cancelStat()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("scan: fetch asset record: %w", err)
 	}
 	sub.Stat = stat
 	// Each fetch stamps its own completion time. Later temporal statements —
@@ -365,7 +365,7 @@ func (s *Scanner) Subject(ctx context.Context, a mechanics.Asset) (*mechanics.Su
 	issuer, err := s.Horizon.Account(acctCtx, a.Issuer)
 	cancelAcct()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("scan: fetch issuer account: %w", err)
 	}
 	sub.Issuer = issuer
 	sub.IssuerFetchedAt = time.Now().UTC()
@@ -556,7 +556,25 @@ func (s *Scanner) Scan(ctx context.Context, a mechanics.Asset) (*mechanics.Repor
 	if err != nil {
 		return nil, err
 	}
-	return s.Engine.Run(ctx, sub)
+	return bindScanner(s.Engine.Run(ctx, sub))
+}
+
+// bindScanner marks a report produced by a real scan as scanner-bound, so its
+// evidence preimage names the code that produced it (the v4 encoding, #40 and
+// #271).
+//
+// The binding is switched on here rather than in Engine.Run or
+// attest.FromReport. Engine.Run classifies whatever Subject it is handed, and
+// unit tests and the eval harness drive it with fixtures; FromReport derives
+// arguments from a report it did not produce and must not add claims to it.
+// scan.Scanner is the entry point that performs a live scan, and it already
+// binds the network for the same reason, so every report it returns carries
+// all three bindings and is written under the newest encoding.
+func bindScanner(rep *mechanics.Report, err error) (*mechanics.Report, error) {
+	if rep != nil {
+		rep.ScannerBound = true
+	}
+	return rep, err
 }
 
 // SubjectWithHolder fetches everything Subject does, then additionally fetches
@@ -602,5 +620,5 @@ func (s *Scanner) ScanWithHolder(ctx context.Context, a mechanics.Asset, holder 
 		eng = &mechanics.Engine{Checks: append([]mechanics.Check{}, s.Engine.Checks...)}
 		eng.Checks = append(eng.Checks, mechanics.TrustlineCheck{})
 	}
-	return eng.Run(ctx, sub)
+	return bindScanner(eng.Run(ctx, sub))
 }

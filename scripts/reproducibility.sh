@@ -107,7 +107,7 @@ fi
 # preimage version the hash was made under.
 # The issuers table is the only one whose second column is a Stellar issuer
 # (G...) and whose fourth column is a hash fragment. The fifth `Preimage`
-# column names the encoding (v1/v2/v3) and is required: without it the script
+# column names the encoding (v1/v2/v3/v4) and is required: without it the script
 # could not compare like with like (#275). A missing or unknown version is a
 # table error, not a per-asset outcome.
 # Emit TSV:
@@ -116,7 +116,7 @@ if ! ASSETS_TSV="$(python3 - "$DEPLOYMENT" <<'PY'
 import re, sys
 path = sys.argv[1]
 issuer_re = re.compile(r'^G[A-Z2-7]{55}$')
-versions = ("v1", "v2", "v3")
+versions = ("v1", "v2", "v3", "v4")
 rows = []
 with open(path, encoding='utf-8') as f:
     for line in f:

@@ -64,9 +64,22 @@ VERSION_LINES = {
     "v1": "assay-evidence-v1",
     "v2": "assay-evidence-v2",
     "v3": "assay-evidence-v3",
+    "v4": "assay-evidence-v4",
     "assay-evidence-v1": "assay-evidence-v1",
     "assay-evidence-v2": "assay-evidence-v2",
     "assay-evidence-v3": "assay-evidence-v3",
+    "assay-evidence-v4": "assay-evidence-v4",
+}
+
+# Each tag names one layout, and the bindings are cumulative (the table in
+# docs/contract-interface.md): v2 adds checks, v3 adds network, v4 adds the
+# scanner line. RANK orders them so "this version writes that line" is a
+# comparison.
+RANK = {
+    "assay-evidence-v1": 1,
+    "assay-evidence-v2": 2,
+    "assay-evidence-v3": 3,
+    "assay-evidence-v4": 4,
 }
 
 
@@ -121,17 +134,32 @@ def normalize_version(version: str) -> str:
         return VERSION_LINES[version]
     except KeyError as exc:
         raise ValueError(
-            f"unknown preimage version {version!r}; want v1, v2, v3, or assay-evidence-vN"
+            f"unknown preimage version {version!r}; want v1, v2, v3, v4, or assay-evidence-vN"
         ) from exc
 
 
 def select_version(report: dict[str, Any]) -> str:
-    """Name the newest binding the report carries, per the spec."""
-    if report.get("scanner_bound") or report.get("network"):
-        return VERSION_LINES["v3"]
-    if report.get("checks"):
-        return VERSION_LINES["v2"]
-    return VERSION_LINES["v1"]
+    """Name the one tag whose bindings the report carries, per the spec.
+
+    Only the cumulative combinations have a tag; any other combination is
+    refused rather than rendered under a tag that describes another layout.
+    """
+    checks = bool(report.get("checks"))
+    network = bool(report.get("network"))
+    scanner = bool(report.get("scanner_bound"))
+    layouts = {
+        (False, False, False): "v1",
+        (True, False, False): "v2",
+        (True, True, False): "v3",
+        (True, True, True): "v4",
+    }
+    try:
+        return VERSION_LINES[layouts[(checks, network, scanner)]]
+    except KeyError:
+        raise ValueError(
+            f"bindings checks={checks} network={network} scanner_bound={scanner} "
+            "match no preimage version: a network needs checks, a scanner needs both"
+        ) from None
 
 
 def render(
@@ -140,16 +168,21 @@ def render(
     version: str | None = None,
 ) -> tuple[str, bytes]:
     """Render the canonical preimage bytes for one report."""
+    own = select_version(report)
     if version is None:
-        version_line = select_version(report)
+        version_line = own
     else:
+        # An explicit version may withhold bindings the report carries, never
+        # invent one it lacks.
         version_line = normalize_version(version)
+        if RANK[version_line] > RANK[own]:
+            raise ValueError(f"report supports at most {own}, not {version_line}")
+    rank = RANK[version_line]
 
     lines = [version_line]
 
-    # The scanner line is v3-only and only when the report opts into identity
-    # binding. It comes immediately after the version line.
-    if version_line == VERSION_LINES["v3"] and report.get("scanner_bound"):
+    # The scanner line is v4-only. It comes immediately after the version line.
+    if rank >= 4:
         if scanner_identity is None:
             raise ValueError("scanner_bound report requires --scanner-identity")
         lines.append("scanner\t" + escape(scanner_identity))
@@ -169,11 +202,11 @@ def render(
     lines.append("accountability\t" + accountability)
 
     # v1 never had a checks line, even when the report carries a set. The line
-    # is absent, not empty (#269).
+    # is absent, not empty (#269). From v2 on it is always present.
     checks = report.get("checks") or []
     if not isinstance(checks, list):
         raise ValueError(f"checks must be a list, got {checks!r}")
-    if version_line != VERSION_LINES["v1"] and checks:
+    if rank >= 2:
         for check in checks:
             if not isinstance(check, str):
                 raise ValueError(f"check id must be a string, got {check!r}")
@@ -181,7 +214,7 @@ def render(
         lines.append("checks\t" + ",".join(sorted_checks))
 
     network = report.get("network") or ""
-    if version_line == VERSION_LINES["v3"] and network:
+    if rank >= 3:
         if not isinstance(network, str):
             raise ValueError(f"network must be a string, got {network!r}")
         lines.append("network\t" + escape(network))
@@ -230,7 +263,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--scanner-identity",
         default=None,
-        help="identity to render on the v3 scanner line when scanner_bound is set",
+        help="identity to render on the v4 scanner line when scanner_bound is set",
     )
     parser.add_argument(
         "--version",

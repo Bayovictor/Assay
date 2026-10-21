@@ -196,9 +196,20 @@ returning a generic mismatch. A report with no bound set is read as *unknown*,
 never as complete. See
 [contract-interface.md](contract-interface.md#the-preimage-binds-the-check-set).
 
+The scanner version is bound too. Every report `scan.Scanner` produces is
+written under `assay-evidence-v4`, whose `scanner` line names the module version
+that produced it ([#40](https://github.com/use-assay/Assay/issues/40),
+[#271](https://github.com/use-assay/Assay/issues/271)), so the same evidence
+classified by a different release hashes differently and a verifier can refuse
+versions below a minimum (`attest.VerifyVersion`). Until #271 nothing set the
+binding outside tests, so no real scan carried it. The ten attestations on chain
+are v1 and carry no scanner line. The binding protects attestations written from
+now on.
+
 Not eliminated: whoever controls which code runs controls which checks are in
-the engine. Version and check-set binding narrow the window; they do not close
-it. Only threshold attestation does.
+the engine, and an unreleased `devel` build names no version a verifier can
+check. Version and check-set binding narrow the window; they do not close it.
+Only threshold attestation does.
 
 #### 6. Injection through issuer-controlled strings
 

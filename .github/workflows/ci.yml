@@ -61,15 +61,17 @@ jobs:
       # The default bash shell runs with pipefail, so tee does not hide a
       # failing test.
       - name: test
-        run: go test -race -covermode=atomic -coverprofile=coverage.out ./... 2>&1 | tee go-test.log
+        run: go test -race -shuffle=on -covermode=atomic -coverprofile=coverage.out ./... 2>&1 | tee go-test.log
 
       # Per-package coverage, in the log and in the job summary. It reports and
       # does not gate: there is no threshold (#130). It also sends nothing to a
       # third-party service. The report is computed here from `go test` output,
       # and the profile is kept as a GitHub artifact. Runs after a test failure
-      # too, since partial numbers are still information.
+      # too, since partial numbers are still information — but not when the
+      # test step never ran (an earlier vet or build failure), where there is
+      # no log to report on and a usage error would only bury the real one.
       - name: coverage report
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && hashFiles('go-test.log') != '' }}
         run: |
           report=$(./scripts/coverage-report.sh go-test.log coverage.out)
           printf '%s\n' "$report"

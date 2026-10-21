@@ -111,7 +111,8 @@ func TestVerifyPreimageWithoutClaimReportsNoVerdict(t *testing.T) {
 // complete is the rule the encoding document states, and the verifier is where
 // a consumer meets it.
 func TestVerifyPreimageNotesV1CheckSetIsUnknown(t *testing.T) {
-	raw := []byte("assay-evidence-v1\nasset\tAQUA-GABC\n")
+	raw := []byte("assay-evidence-v1\nasset\tAQUA-GABC\nseverity\t0\nbase_severity\t0\n" +
+		"escalated\tfalse\nmechanics\t0\naccountability\tverified\n")
 
 	v, err := attest.VerifyPreimage(raw, "")
 	if err != nil {
@@ -227,7 +228,7 @@ func TestParsePreimage(t *testing.T) {
 	})
 
 	t.Run("asset is unescaped", func(t *testing.T) {
-		info, err := attest.ParsePreimage([]byte("assay-evidence-v1\nasset\tsome\\tasset\n"))
+		info, err := attest.ParsePreimage([]byte(strings.Replace(v1, "AQUA-GABC", `some\tasset`, 1)))
 		if err != nil {
 			t.Fatalf("ParsePreimage: %v", err)
 		}
@@ -242,12 +243,49 @@ func TestParsePreimage(t *testing.T) {
 		}
 	})
 
+	const pubnet = "Public Global Stellar Network ; September 2015"
+	v3 := strings.Replace(v2, "assay-evidence-v2", "assay-evidence-v3", 1) + "network\t" + pubnet + "\n"
+	v4 := strings.Replace(v3, "assay-evidence-v3\n", "assay-evidence-v4\nscanner\tv1.2.3\n", 1)
+
+	t.Run("v3 reports its network", func(t *testing.T) {
+		info, err := attest.ParsePreimage([]byte(v3 + "evidence\th\tu\tc\n"))
+		if err != nil {
+			t.Fatalf("ParsePreimage: %v", err)
+		}
+		if info.Network != pubnet || info.Scanner != "" || len(info.Checks) != 2 {
+			t.Errorf("info = %+v", info)
+		}
+	})
+
+	t.Run("v4 reports its scanner and network", func(t *testing.T) {
+		info, err := attest.ParsePreimage([]byte(v4))
+		if err != nil {
+			t.Fatalf("ParsePreimage: %v", err)
+		}
+		if info.Scanner != "v1.2.3" || info.Network != pubnet {
+			t.Errorf("info = %+v", info)
+		}
+	})
+
+	header := "asset\tAQUA-GABC\nseverity\t1\nbase_severity\t1\nescalated\tfalse\nmechanics\t0\naccountability\tunknown\n"
 	refusals := map[string]string{
 		"empty":             "",
-		"unknown version":   "assay-evidence-v9\nasset\tAQUA-GABC\n",
+		"unknown version":   "assay-evidence-v9\n" + header,
 		"no asset line":     "assay-evidence-v1\nseverity\t1\n",
+		"truncated header":  "assay-evidence-v1\nasset\tAQUA-GABC\n",
 		"line without tab":  "assay-evidence-v1\nasset\tAQUA-GABC\nnot-a-pair\n",
-		"v2 without checks": "assay-evidence-v2\nasset\tAQUA-GABC\n",
+		"v2 without checks": "assay-evidence-v2\n" + header,
+		// The #269 shape: an empty checks line under v1. No attestation was
+		// ever hashed over these bytes, so a verifier must not read them as v1.
+		"v1 with an empty checks line": v1 + "checks\t\n",
+		"v1 with a checks line":        v1 + "checks\tcapability\n",
+		"v2 with an empty checks line": "assay-evidence-v2\n" + header + "checks\t\n",
+		"v2 with a network line":       v2 + "network\t" + pubnet + "\n",
+		"v3 without a network line":    strings.Replace(v2, "assay-evidence-v2", "assay-evidence-v3", 1),
+		"v3 with a scanner line":       strings.Replace(v4, "assay-evidence-v4", "assay-evidence-v3", 1),
+		"v4 without a scanner line":    strings.Replace(v3, "assay-evidence-v3", "assay-evidence-v4", 1),
+		"header out of order":          "assay-evidence-v1\nseverity\t1\nasset\tAQUA-GABC\nbase_severity\t1\nescalated\tfalse\nmechanics\t0\naccountability\tunknown\n",
+		"field after evidence":         v1 + "evidence\th\tu\tc\nchecks\tcapability\n",
 	}
 	for name, in := range refusals {
 		t.Run("refuses "+name, func(t *testing.T) {

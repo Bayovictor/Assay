@@ -121,7 +121,8 @@ func TestConformanceSuite(t *testing.T) {
 			// The version line must be a tag the encoding actually emits.
 			first, _, _ := strings.Cut(c.Preimage, "\n")
 			switch first {
-			case attest.PreimageVersion, attest.PreimageVersionCheckSet, attest.PreimageVersionNetwork:
+			case attest.PreimageVersion, attest.PreimageVersionCheckSet, attest.PreimageVersionNetwork,
+				attest.PreimageVersionScanner:
 			default:
 				t.Errorf("preimage starts with unknown version line %q", first)
 			}

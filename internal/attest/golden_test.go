@@ -67,8 +67,9 @@ func TestGoldenPreimageBytesAreIdentical(t *testing.T) {
 
 			// Derive the bytes fresh. Preimage takes the Report and returns
 			// the encoding; nothing else is involved.
+			pinVectorIdentity(t, name)
 			rep := build()
-			got := []byte(attest.Preimage(rep))
+			got := []byte(mustPreimage(t, rep))
 
 			// The property under test: identical bytes, no interpretation.
 			if !bytes.Equal(got, want) {
@@ -97,7 +98,7 @@ func TestGoldenPreimageBytesAreIdentical(t *testing.T) {
 			// The encoder derives the same digest again on a second pass.
 			// Re-running it also keeps the test meaningful under -count and
 			// -race, where a map-order bug would not always show on one pass.
-			if again := attest.Preimage(rep); !bytes.Equal([]byte(again), got) {
+			if again := mustPreimage(t, rep); !bytes.Equal([]byte(again), got) {
 				t.Fatalf("Preimage did not derive the same bytes twice: a map or sort is deciding the output")
 			}
 		})
@@ -134,13 +135,13 @@ func TestGoldenFilesHaveCanonicalLineEndings(t *testing.T) {
 			t.Errorf("%s ends with a blank line: the canonical encoding terminates the last line exactly once", e)
 		}
 		if !hasAnyPreimageVersion(string(raw)) {
-			t.Errorf("%s does not start with a known version line (v1, v2 or v3)", e)
+			t.Errorf("%s does not start with a known version line (v1, v2, v3 or v4)", e)
 		}
 	}
 }
 
 // hasAnyPreimageVersion reports whether s begins with one of the version lines
-// the encoding has ever produced (v1, v2 or v3). The line-ending fixture check
+// the encoding has ever produced (v1, v2, v3 or v4). The line-ending fixture check
 // must accept every version, because the vector directory also holds the
 // network-bound (v3) preimages.
 func hasAnyPreimageVersion(s string) bool {
@@ -148,6 +149,7 @@ func hasAnyPreimageVersion(s string) bool {
 		attest.PreimageVersion,
 		attest.PreimageVersionCheckSet,
 		attest.PreimageVersionNetwork,
+		attest.PreimageVersionScanner,
 	} {
 		if strings.HasPrefix(s, v+"\n") {
 			return true
