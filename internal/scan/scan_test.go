@@ -164,7 +164,11 @@ func assetPreimage(t *testing.T, in string) string {
 	if err != nil {
 		t.Fatalf("ParseAsset(%q): %v", in, err)
 	}
-	return attest.Preimage(&mechanics.Report{Asset: a})
+	pre, err := attest.Preimage(&mechanics.Report{Asset: a})
+	if err != nil {
+		t.Fatalf("Preimage(%q): %v", in, err)
+	}
+	return pre
 }
 
 // fakeSources stands up stand-ins for Horizon, StellarExpert, and the issuer's

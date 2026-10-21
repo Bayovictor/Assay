@@ -1,6 +1,6 @@
 # Package-level testing guide
 
-Go tests require Go 1.26.9 or later. The `go` directive in `go.mod` is
+Go tests require Go 1.26.10 or later. The `go` directive in `go.mod` is
 the source of truth for the minimum version. CI also runs the attestation
 golden-file tests on Go 1.26.x and 1.27.x.
 
@@ -192,7 +192,7 @@ make lint    # golangci-lint
 make fmt     # gofmt -w .
 ```
 
-Use the Go version named in `go.mod` (**1.26.9**): every CI job pins to it via
+Use the Go version named in `go.mod` (**1.26.10**): every CI job pins to it via
 `go-version-file`, and the floor was raised there to clear the reachable
 `net/http` advisories that fail `govulncheck` on older standard libraries. A
 toolchain above the floor is fine — `attest-reproducibility` runs the golden

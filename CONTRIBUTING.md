@@ -73,7 +73,7 @@ the reason to have a check at all is that it knows when that is fine.
 
 ## Development
 
-Go development requires Go 1.26.9 or later. The `go` directive in
+Go development requires Go 1.26.10 or later. The `go` directive in
 `go.mod` is the source of truth for the minimum version.
 
 ```sh
@@ -104,18 +104,20 @@ make read   ASSET=CODE-ISSUER   # read it back with get_safety
 
 ### Go toolchain
 
-The module's Go floor lives in `go.mod` (`go 1.26.9`) and nowhere else: every
+The module's Go floor lives in `go.mod` (`go 1.26.10`) and nowhere else: every
 CI job reads it with `go-version-file: go.mod`, so raising the floor raises
 every job at once. `setup-go` also exports `GOTOOLCHAIN=local`, so a job
 running below the floor fails rather than quietly downloading a newer Go.
 
-The floor is **1.26.9** because Go 1.25 is end-of-life and `govulncheck`
-reports reachable standard-library vulnerabilities in its `net/http` —
-GO-2026-6617 and GO-2026-6613 among them — both on the paths Assay uses to
-fetch attacker-controlled `stellar.toml` documents. The floor was raised from
-`1.22` to `1.25.13` on 2026-10-06 and from `1.25.13` to `1.26.9` on
-2026-10-16, each time as a deliberate commit recorded here. Raise it the same
-way, and verify before and after:
+The floor is **1.26.10** because `govulncheck` reports reachable
+standard-library vulnerabilities otherwise: Go 1.25 carried them in `net/http`
+(GO-2026-6617 and GO-2026-6613, both on the paths Assay uses to fetch
+attacker-controlled `stellar.toml` documents), and Go 1.26.9 carried GO-2026-6809
+in `crypto/x509` (`Certificate.Verify` distrusts compromised intermediates).
+The floor was raised from `1.22` to `1.25.13` on 2026-10-06, from `1.25.13` to
+`1.26.9` on 2026-10-16, and from `1.26.9` to `1.26.10` on 2026-10-21, each time
+as a deliberate commit recorded here. Raise it the same way, and verify before
+and after:
 
 ```sh
 go run golang.org/x/vuln/cmd/govulncheck@latest ./...
