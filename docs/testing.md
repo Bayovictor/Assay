@@ -194,7 +194,8 @@ make fmt     # gofmt -w .
 
 Use the Go version named in `go.mod` (**1.26.10**): every CI job pins to it via
 `go-version-file`, and the floor was raised there to clear the reachable
-`net/http` advisories that fail `govulncheck` on older standard libraries. A
+`net/http` and `crypto/x509` advisories that fail `govulncheck` on older
+standard libraries. A
 toolchain above the floor is fine — `attest-reproducibility` runs the golden
 preimage tests on `1.26.x` and `1.27.x` — but a toolchain below it cannot build
 the module. See [CONTRIBUTING.md](../CONTRIBUTING.md#go-toolchain).
